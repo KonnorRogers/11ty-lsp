@@ -223,6 +223,8 @@ connection.onDidChangeWatchedFiles(async (params) => {
 
   if (needsRestart) {
     await restartServer();
+  } else {
+
   }
 });
 

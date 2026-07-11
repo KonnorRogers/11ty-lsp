@@ -1,17 +1,15 @@
 {
-  "name": "REPLACE_ME",
-  "description": "REPLACE_ME",
-  "author": "REPLACE_ME",
+  "name": "11ty-lsp",
+  "description": "11ty-lsp",
+  "author": "Konnor Rogers <konnor5456@gmail.com>",
   "license": "MIT",
-  "version": "1.0.0",
-  "publisher": "REPLACE_ME",
+  "version": "0.0.1",
   "categories": [],
   "engines": {
     "vscode": "^1.75.0"
   },
   "activationEvents": [
-    "onLanguage:nunjucks",
-    "onLanguage:markdown"
+    "onLanguage:*"
   ],
   "main": "./client/out/vscode",
   "scripts": {
@@ -22,6 +20,7 @@
     "postinstall": "cd client && npm install && cd ../server && npm install && cd .."
   },
   "devDependencies": {
+    "@11ty/eleventy": "^4.0.0-alpha.10",
     "@types/node": "^20.19.10",
     "typescript": "^5.9.2"
   },
@@ -47,5 +46,8 @@
         "title": "Restart 11ty LSP Server"
       }
     ]
+  },
+  "dependencies": {
+    "@awesome.me/buildawesome": "^4.0.0-alpha.10"
   }
 }

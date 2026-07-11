@@ -1,6 +1,10 @@
 ---
-data:
-  foo: "bar"
+foo: "bar"
+bar: "baz"
+items:
+  - "Apples"
+  - "Bananas"
+  - "Oatmeal"
 ---
 <!DOCTYPE html>
 <html lang="en">
@@ -10,15 +14,15 @@ data:
     <title></title>
   </head>
   <body>
-    {{ data.foo }}
-    {{ data.foo }}
+    {{ foo }}
+    {{ foo }}
 
     {{ foo | first }}
 
     {{ bar }}
 
     {% for item in items %}
-      {{ item.foo }}
+      {{ item }}
     {% endfor %}
   </body>
 </html>

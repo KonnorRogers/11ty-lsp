@@ -1,0 +1,18 @@
+[
+  {
+    "url": "/test/",
+    "inputPath": "./test.njk",
+    "outputPath": "./output.json/test/index.html",
+    "rawInput": "<!DOCTYPE html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n    <title></title>\n  </head>\n  <body>\n    {{ foo }}\n    {{ foo }}\n\n    {{ foo | first }}\n\n    {{ bar }}\n\n    {% for item in items %}\n      {{ item }}\n    {% endfor %}\n  </body>\n</html>\n",
+    "content": "<!DOCTYPE html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n    <title></title>\n  </head>\n  <body>\n    bar\n    bar\n\n    b\n\n    baz\n\n    \n      Apples\n    \n      Bananas\n    \n      Oatmeal\n    \n  </body>\n</html>\n",
+    "data": {}
+  },
+  {
+    "url": "/_site/test/",
+    "inputPath": "./_site/test/index.html",
+    "outputPath": "./output.json/_site/test/index.html",
+    "rawInput": "<!DOCTYPE html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n    <title></title>\n  </head>\n  <body>\n    bar\n    bar\n\n    b\n\n    baz\n\n    \n      Apples\n    \n      Bananas\n    \n      Oatmeal\n    \n  </body>\n</html>\n",
+    "content": "<!DOCTYPE html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n    <title></title>\n  </head>\n  <body>\n    bar\n    bar\n\n    b\n\n    baz\n\n    \n      Apples\n    \n      Bananas\n    \n      Oatmeal\n    \n  </body>\n</html>\n",
+    "data": {}
+  }
+]
