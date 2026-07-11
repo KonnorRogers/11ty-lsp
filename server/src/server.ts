@@ -14,8 +14,6 @@ import {
   TextDocumentIdentifier,
   DidChangeWatchedFilesNotification,
   ExecuteCommandParams,
-  WorkspaceEdit,
-  ApplyWorkspaceEditParams
 } from "vscode-languageserver/node";
 
 import { TextDocument } from "vscode-languageserver-textdocument";
@@ -25,16 +23,13 @@ import {
   getLanguageModes
 } from "./languageModes";
 
-import {
-  writeFileSync
-} from "fs";
 import { NunjucksSettings } from "./settings/nunjucksSettings";
 import { NunjucksParser } from "./core/nunjucksParser";
 import { NunjucksCompletionProvider } from "./core/nunjucksCompletion";
 import { NunjucksValidator } from "./core/nunjucksValidator";
 import { NunjucksHoverProvider } from "./core/nunjucksHover";
 
-const RESTART_COMMAND = 'nunjucks-lsp.restart';
+const RESTART_COMMAND = '11ty-lsp.restart';
 
 // const debugFile = "/Users/konnorrogers/debug.log"
 // writeFileSync(debugFile, "")
@@ -56,7 +51,6 @@ let hasDiagnosticRelatedInformationCapability = false;
 // Default settings
 const defaultSettings: NunjucksSettings = {
   maxNumberOfProblems: 1000,
-  templatePaths: ['./templates', './views'],
   enabledFeatures: {
     completion: true,
     diagnostics: true,
@@ -154,7 +148,7 @@ connection.onInitialize((params: InitializeParams) => {
       }
     },
     serverInfo: {
-      name: "nunjucks-lsp",
+      name: "11ty-lsp",
       version: "0.1.0"
     }
   };
@@ -186,7 +180,7 @@ connection.onDidChangeConfiguration(async (change) => {
     documentSettings.clear();
   } else {
     globalSettings = <NunjucksSettings>(
-      (change.settings["nunjucks-lsp"] || defaultSettings)
+      (change.settings["11ty-lsp"] || defaultSettings)
     );
   }
 
@@ -296,7 +290,7 @@ function getDocumentSettings(resource: string): Thenable<NunjucksSettings> {
   if (!result) {
     result = connection.workspace.getConfiguration({
       scopeUri: resource,
-      section: 'nunjucks-lsp'
+      section: '11ty-lsp'
     });
     documentSettings.set(resource, result);
   }

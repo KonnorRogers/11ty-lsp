@@ -1,8 +1,8 @@
 {
-  "name": "webawesome-lsp-server",
-  "description": "REPLACE_ME",
-  "version": "1.0.0",
-  "author": "REPLACE_ME",
+  "name": "11ty-lsp",
+  "description": "LSP for 11ty",
+  "version": "0.0.1",
+  "author": "Konnor Rogers",
   "license": "MIT",
   "engines": {
     "node": "*"

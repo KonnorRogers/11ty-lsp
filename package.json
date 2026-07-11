@@ -41,24 +41,10 @@
         "configuration": "./language-configuration.json"
       }
     ],
-    "configuration": {
-      "type": "object",
-      "title": "Nunjucks LSP Configuration",
-      "properties": {
-        "nunjucks-lsp.templatePaths": {
-          "type": "array",
-          "default": [
-            "./templates",
-            "./views"
-          ],
-          "description": "Paths to search for Nunjucks templates"
-        }
-      }
-    },
     "commands": [
       {
-        "command": "nunjucks-lsp.restart",
-        "title": "Restart Nunjucks LSP Server"
+        "command": "11ty-lsp.restart",
+        "title": "Restart 11ty LSP Server"
       }
     ]
   }

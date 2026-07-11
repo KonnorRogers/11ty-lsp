@@ -37,9 +37,10 @@ export function activate(context: ExtensionContext) {
   };
 
   // Create the language client and start the client.
+  const id = crypto.randomUUID().slice(0, 8)
   client = new LanguageClient(
-    "REPLACE_ME language-server-id",
-    "REPLACE_ME language server name",
+    id,
+    "11ty-lsp",
     serverOptions,
     clientOptions
   );
