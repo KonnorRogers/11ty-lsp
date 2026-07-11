@@ -73,7 +73,6 @@ let nunjucksCompletionProvider = new NunjucksCompletionProvider(parser);
 let nunjucksValidator = new NunjucksValidator(parser);
 let nunjucksHoverProvider = new NunjucksHoverProvider(parser)
 
-
 // Cache the settings of all open documents
 const documentSettings: Map<string, Thenable<NunjucksSettings>> = new Map();
 
