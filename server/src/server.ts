@@ -31,6 +31,13 @@ import { NunjucksHoverProvider } from "./core/nunjucksHover";
 
 const RESTART_COMMAND = '11ty-lsp.restart';
 
+const ELEVENTY_CONFIG_FILES = [
+  ".eleventy.js",
+  "eleventy.config.js",
+  "eleventy.config.mjs",
+  "eleventy.config.cjs"
+]
+
 // const debugFile = "/Users/konnorrogers/debug.log"
 // writeFileSync(debugFile, "")
 
@@ -168,8 +175,8 @@ connection.onInitialized(() => {
   }
   connection.client.register(DidChangeWatchedFilesNotification.type, {
     watchers: [
-      { globPattern: `**/**/*.md` },
-      { globPattern: `**/**/*.njk` },
+      { globPattern: `**/**/*.*` },
+      // { globPattern: `**/**/*.njk` },
     ],
   })
 });
@@ -206,7 +213,7 @@ connection.onDidChangeWatchedFiles(async (params) => {
 
   // Check if any template files were added/removed (might need restart)
   for (const change of params.changes) {
-    if (change.uri.endsWith('.njk') || change.uri.endsWith('.nunjucks')) {
+    if (ELEVENTY_CONFIG_FILES.some((configFile) => change.uri.endsWith(configFile))) {
       // File type: 1 = Created, 3 = Deleted
       if (change.type === 1 || change.type === 3) {
         needsRestart = true;
