@@ -1,0 +1,28 @@
+{
+  "name": "webawesome-lsp-server",
+  "description": "REPLACE_ME",
+  "version": "1.0.0",
+  "author": "REPLACE_ME",
+  "license": "MIT",
+  "engines": {
+    "node": "*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "REPLACE_ME"
+  },
+  "scripts": {
+    "test": "node --import tsx --test ./src/**/*.test.ts"
+  },
+  "dependencies": {
+    "@types/nunjucks": "^3.2.6",
+    "nunjucks": "^3.2.4",
+    "vscode-css-languageservice": "^6.3.2",
+    "vscode-html-languageservice": "^5.3.1",
+    "vscode-languageserver": "^8.1.0",
+    "vscode-languageserver-textdocument": "^1.0.8"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.3"
+  }
+}

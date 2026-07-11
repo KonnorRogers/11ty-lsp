@@ -1,0 +1,65 @@
+{
+  "name": "REPLACE_ME",
+  "description": "REPLACE_ME",
+  "author": "REPLACE_ME",
+  "license": "MIT",
+  "version": "1.0.0",
+  "publisher": "REPLACE_ME",
+  "categories": [],
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "activationEvents": [
+    "onLanguage:nunjucks",
+    "onLanguage:markdown"
+  ],
+  "main": "./client/out/vscode",
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "build": "tsc --build",
+    "watch": "tsc -b -w",
+    "start": "npm run watch",
+    "postinstall": "cd client && npm install && cd ../server && npm install && cd .."
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.10",
+    "typescript": "^5.9.2"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "nunjucks",
+        "aliases": [
+          "Nunjucks",
+          "nunjucks"
+        ],
+        "extensions": [
+          ".njk",
+          ".nunjucks",
+          ".html"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Nunjucks LSP Configuration",
+      "properties": {
+        "nunjucks-lsp.templatePaths": {
+          "type": "array",
+          "default": [
+            "./templates",
+            "./views"
+          ],
+          "description": "Paths to search for Nunjucks templates"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "nunjucks-lsp.restart",
+        "title": "Restart Nunjucks LSP Server"
+      }
+    ]
+  }
+}
