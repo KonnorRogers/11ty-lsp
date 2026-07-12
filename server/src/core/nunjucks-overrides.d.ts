@@ -236,6 +236,11 @@ declare module 'nunjucks/src/nodes.js' {
   class Case<T extends string = "Case"> extends Node<T> {}
   class LookupVal<T extends string = "LookupVal"> extends Node<T> {
     get fields(): ['target', 'val']
+    /**
+     * This recursively sets values you need to loop through until the end. Loop over all targets and reverse order them and then construct the target object that way.
+     */
+    target: LookupVal<T> | (Token & { value: unknown })
+    val: Token & { value: unknown }
   }
   class BinOp<T extends string = "BinOp"> extends Node<T> {}
   class In<T extends string = "In"> extends Node<T> {}

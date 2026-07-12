@@ -4,8 +4,70 @@ import { Hover, MarkupKind, Position, Range } from "vscode-css-languageservice";
 import { NunjucksSettings } from "../settings/nunjucksSettings";
 import { getContext } from "./getContext";
 import * as definitions from "./definitions"
-import * as fs from "node:fs"
-import { AnyNode, NodeList, printNodes } from "nunjucks/src/nodes.js";
+import { AnyNode, LookupVal } from "nunjucks/src/nodes.js";
+import { logger } from "../logger";
+
+function getKeysForLookupValNode (node: LookupVal) {
+  let target = null
+  const keys = []
+  let currentNode = node
+  while (true) {
+    target = currentNode.target
+
+    if (target == null) {
+      break
+    }
+
+    if ("value" in target) {
+      keys.unshift(target.value)
+    }
+
+    if ("val" in target) {
+      keys.unshift(target.val.value)
+    }
+
+    // @ts-expect-error
+    currentNode = target
+  }
+
+  const key = node.val.value
+  keys.push(key)
+  return keys
+}
+
+function dig(obj: unknown, ...args: any) {
+  let current: unknown = obj;
+  for (const key of args) {
+    if (current == null) return current;
+    try {
+      // @ts-expect-error
+      current = current[key];
+    } catch (_e) {
+      current = undefined
+      break;
+    }
+  }
+  return current;
+}
+
+function valueToText (value: unknown) {
+  if (typeof value === "object") {
+    const name = value?.constructor?.name
+    value = JSON.stringify(value, null, 2)
+
+    if (name) {
+      value = name + " " + value
+    }
+  } else {
+    if (typeof value === "string") {
+      value = "\"" + value + "\""
+    } else {
+      value = String(value)
+    }
+  }
+
+  return value
+}
 
 export class NunjucksHoverProvider {
   constructor(public parser: NunjucksParser) {}
@@ -114,7 +176,7 @@ export class NunjucksHoverProvider {
 
     const contents = {
       contents: {
-        kind: MarkupKind.Markdown,
+        kind: MarkupKind.PlainText,
         value: word.word,
       },
       range: word.range
@@ -129,25 +191,33 @@ export class NunjucksHoverProvider {
     //   return contents
     // }
     // contents.contents.value = node.typename + ": " + str + "\n\n"
-    const debug = JSON.stringify(node, null, 2)
-    contents.contents.value = `nodeType: ${node.typename}\n\n${debug}`
+    // const debug = JSON.stringify(node, null, 2)
+    // contents.contents.value = `nodeType: ${node.typename}\n\n${debug}`
+    contents.contents.value = `nodeType: ${node.typename}`
 
     if (node.typename === "Filter" && definitions.filters[str]) {
-      contents.contents.value += definitions.filters[str].documentation as string
-      return contents
+      const documentation = definitions.filters[str]?.documentation as string
+      if (documentation) {
+        contents.contents.value = documentation
+        return contents
+      }
     }
 
     // These are "top level" {{ thing }}
     if (node.typename === "Symbol") {
       // @ts-expect-error
-      contents.contents.value = data[node.value].toString()
+      let value = data[node.value]
 
+      contents.contents.value = `Value: ` + valueToText(value)
       return contents
     }
 
     // These are "nested" {{ data.thing }}
-    if (data && node.typename === "LookupVal") {
-      contents.contents.value = `fields: ${node.fields}\n` + contents.contents.value
+    if (node.typename === "LookupVal") {
+      const keys = getKeysForLookupValNode(node)
+      const val = dig(data, ...keys)
+
+      contents.contents.value = `Value: ${valueToText(val)}\n`
     }
 
     // if (node.typename === "Global" && definitions.globalFunctions[str]) {

@@ -1,6 +1,7 @@
 import * as path from "node:path"
 import * as os from "node:os"
 import * as fs from "node:fs"
+import * as crypto from "node:crypto"
 import { fileURLToPath } from "node:url";
 import {
   createConnection,
@@ -33,10 +34,12 @@ import { NunjucksCompletionProvider } from "./core/nunjucksCompletion";
 import { NunjucksValidator } from "./core/nunjucksValidator";
 import { NunjucksHoverProvider } from "./core/nunjucksHover";
 import { getJSONData } from "./core/getJSONData";
+import { logger } from "./logger";
 
 const RESTART_COMMAND = '11ty-lsp.restart';
 
-let data = {}
+let data: Record<string, unknown>[] = [
+]
 let configPath = ""
 
 const ROOT_MARKERS = [
@@ -45,7 +48,6 @@ const ROOT_MARKERS = [
 ];
 
 const tmpFile = path.join(os.tmpdir(), "output-" + crypto.randomUUID())
-
 /** Closest ancestor of `startDir` containing any marker, or null. */
 function findRootDir(startDir: string, markers = ROOT_MARKERS) {
   const configFile = findRootConfigFile(startDir, markers)
@@ -82,19 +84,34 @@ function findConfigForDocument(documentUri: string): string | null {
   return findRootConfigFile(path.dirname(filePath));
 }
 
-async function updateConfigForDocument(document: TextDocument): Promise<Record<string, unknown> | null> {
+async function updateConfigForDocument(document: TextDocument): Promise<typeof data | null> {
   const found = findConfigForDocument(document.uri);
   if (found && found !== configPath) {
     configPath = found;
-    data = await getJSONData({ configPath, output: tmpFile });
-    return data
+    data = await getJSONData({ configPath, output: tmpFile }).catch((e) => {
+      logger.write(e)
+    });
+
+    if (data) {
+      return data
+    }
+
+    return null
   }
 
   return null
 }
 
-// const debugFile = "/Users/konnorrogers/debug.log"
-// writeFileSync(debugFile, "")
+
+process.on("uncaughtException", (e) => {
+  logger.write(e)
+})
+process.on("unhandledRejection", (e) => {
+  logger.write(e)
+})
+
+
+
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -218,6 +235,10 @@ connection.onInitialize((params: InitializeParams) => {
 });
 
 connection.onInitialized(() => {
+  const startupMessage = `11ty-lsp server started (pid ${process.pid}) at ${new Date().toISOString()}`;
+  connection.console.log(startupMessage);
+  connection.window.showInformationMessage(startupMessage);
+
   if (hasConfigurationCapability) {
     // Register for all configuration changes
     connection.client.register(DidChangeConfigurationNotification.type, undefined);
@@ -351,16 +372,17 @@ connection.onHover(async (params): Promise<Hover | null> => {
 
     const rootDir = findRootDir(filePath)
 
-    let hoverData = data
     let relativePath = ""
+    let hoverData = data
     if (rootDir) {
       relativePath = path.relative(rootDir, filePath)
       // Normalizes it to the same key as 11ty
       const key = "./" + relativePath.split(path.sep).join("/")
+      logger.write({key, relativePath})
       // @ts-expect-error
-      hoverData = hoverData.data.find((obj) => {
+      hoverData = hoverData?.find?.((obj) => {
         return obj.inputPath === key
-      }) || hoverData
+      })?.data || {}
     }
     return nunjucksHoverProvider.provideHover(document, params.position, settings, hoverData);
   } catch (error) {

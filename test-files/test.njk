@@ -1,6 +1,10 @@
 ---
 foo: "bar"
 bar: "baz"
+obj:
+  a: "A"
+  b: "B"
+  c: "C"
 items:
   - "Apples"
   - "Bananas"
@@ -20,6 +24,13 @@ items:
     {{ foo | first }}
 
     {{ bar }}
+
+    {{ obj }}
+    {{ obj.a.b.c.d }}
+    {{ obj.b }}
+    {{ obj.c }}
+
+    {{ items }}
 
     {% for item in items %}
       {{ item }}
