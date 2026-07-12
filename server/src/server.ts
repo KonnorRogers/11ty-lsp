@@ -1,3 +1,7 @@
+import * as path from "node:path"
+import * as os from "node:os"
+import * as fs from "node:fs"
+import { fileURLToPath } from "node:url";
 import {
   createConnection,
   TextDocuments,
@@ -28,15 +32,66 @@ import { NunjucksParser } from "./core/nunjucksParser";
 import { NunjucksCompletionProvider } from "./core/nunjucksCompletion";
 import { NunjucksValidator } from "./core/nunjucksValidator";
 import { NunjucksHoverProvider } from "./core/nunjucksHover";
+import { getJSONData } from "./core/getJSONData";
 
 const RESTART_COMMAND = '11ty-lsp.restart';
 
-const ELEVENTY_CONFIG_FILES = [
-  ".eleventy.js",
-  "eleventy.config.js",
-  "eleventy.config.mjs",
-  "eleventy.config.cjs"
-]
+let data = {}
+let configPath = ""
+
+const ROOT_MARKERS = [
+  "eleventy.config.js", "eleventy.config.mjs", "eleventy.config.cjs",
+  ".eleventy.js"
+];
+
+const tmpFile = path.join(os.tmpdir(), "output-" + crypto.randomUUID())
+
+/** Closest ancestor of `startDir` containing any marker, or null. */
+function findRootDir(startDir: string, markers = ROOT_MARKERS) {
+  const configFile = findRootConfigFile(startDir, markers)
+  if (configFile) {
+    return path.dirname(configFile)
+  }
+
+  return null
+}
+
+function findRootConfigFile(startDir: string, markers = ROOT_MARKERS): string | null {
+  let dir = path.resolve(startDir);
+  const { root } = path.parse(dir); // "/" or "C:\\"
+
+  while (true) {
+    const marker = markers.find((m) => fs.existsSync(path.join(dir, m)));
+    if (marker) {
+      return path.join(dir, marker); // full path, not just the filename
+    }
+
+    if (dir === root) return null; // hit the fs root, give up
+    dir = path.dirname(dir);
+  }
+}
+
+/** Full path to the closest 11ty config above `documentUri`, or null. */
+function findConfigForDocument(documentUri: string): string | null {
+  let filePath: string;
+  try {
+    filePath = fileURLToPath(documentUri);
+  } catch {
+    return null; // untitled / non-file document
+  }
+  return findRootConfigFile(path.dirname(filePath));
+}
+
+async function updateConfigForDocument(document: TextDocument): Promise<Record<string, unknown> | null> {
+  const found = findConfigForDocument(document.uri);
+  if (found && found !== configPath) {
+    configPath = found;
+    data = await getJSONData({ configPath, output: tmpFile });
+    return data
+  }
+
+  return null
+}
 
 // const debugFile = "/Users/konnorrogers/debug.log"
 // writeFileSync(debugFile, "")
@@ -203,6 +258,11 @@ connection.onExecuteCommand(async (params: ExecuteCommandParams) => {
 
 // The content of a text document has changed
 documents.onDidChangeContent(change => {
+  updateConfigForDocument(change.document).then((json) => {
+    if (json) {
+      data = json
+    }
+  });
   sendDiagnostics(change.document);
 });
 
@@ -212,7 +272,7 @@ connection.onDidChangeWatchedFiles(async (params) => {
 
   // Check if any template files were added/removed (might need restart)
   for (const change of params.changes) {
-    if (ELEVENTY_CONFIG_FILES.some((configFile) => change.uri.endsWith(configFile))) {
+    if (ROOT_MARKERS.some((configFile) => change.uri.endsWith(configFile))) {
       // File type: 1 = Created, 3 = Deleted
       if (change.type === 1 || change.type === 3) {
         needsRestart = true;
@@ -224,7 +284,12 @@ connection.onDidChangeWatchedFiles(async (params) => {
   if (needsRestart) {
     await restartServer();
   } else {
-
+    // if (configPath) {
+    //   data = updateJSONData({
+    //     configPath,
+    //     output: tmpFile
+    //   })
+    // }
   }
 });
 
@@ -281,7 +346,23 @@ connection.onHover(async (params): Promise<Hover | null> => {
       return null;
     }
 
-    return nunjucksHoverProvider.provideHover(document, params.position, settings);
+
+    const filePath = fileURLToPath(document.uri);
+
+    const rootDir = findRootDir(filePath)
+
+    let hoverData = data
+    let relativePath = ""
+    if (rootDir) {
+      relativePath = path.relative(rootDir, filePath)
+      // Normalizes it to the same key as 11ty
+      const key = "./" + relativePath.split(path.sep).join("/")
+      // @ts-expect-error
+      hoverData = hoverData.data.find((obj) => {
+        return obj.inputPath === key
+      }) || hoverData
+    }
+    return nunjucksHoverProvider.provideHover(document, params.position, settings, hoverData);
   } catch (error) {
     connection.console.error(`Error in hover provider: ${error}`);
     return null;

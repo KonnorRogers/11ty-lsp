@@ -13,7 +13,8 @@ export class NunjucksHoverProvider {
   provideHover(
     document: TextDocument,
     position: Position,
-    settings: NunjucksSettings
+    settings: NunjucksSettings,
+    data: unknown
   ): Hover | null {
     const {
       previousContent,
@@ -42,7 +43,8 @@ export class NunjucksHoverProvider {
     //   return hover
     // }
 
-    const hover = this.wordToHoverDocumentationForNode(currentNode, word);
+
+    const hover = this.wordToHoverDocumentationForNode(currentNode, word, data);
 
     // Find what's at the current position
     return hover;
@@ -103,7 +105,11 @@ export class NunjucksHoverProvider {
   /**
    * Provide a more contextual hover for a token
    */
-  wordToHoverDocumentationForNode(node: AnyNode | null, word: ReturnType<typeof this.getWordAtCursor>): Hover | null {
+  wordToHoverDocumentationForNode(
+    node: AnyNode | null,
+    word: ReturnType<typeof this.getWordAtCursor>,
+    data?: unknown
+  ): Hover | null {
     if (word == null) { return null }
 
     const contents = {
@@ -122,11 +128,26 @@ export class NunjucksHoverProvider {
     //   contents.contents.value += "Tag: " + definitions.tags[str].documentation as string
     //   return contents
     // }
-    contents.contents.value = node.typename + ": " + str + "\n\n"
+    // contents.contents.value = node.typename + ": " + str + "\n\n"
+    const debug = JSON.stringify(node, null, 2)
+    contents.contents.value = `nodeType: ${node.typename}\n\n${debug}`
 
     if (node.typename === "Filter" && definitions.filters[str]) {
       contents.contents.value += definitions.filters[str].documentation as string
       return contents
+    }
+
+    // These are "top level" {{ thing }}
+    if (node.typename === "Symbol") {
+      // @ts-expect-error
+      contents.contents.value = data[node.value].toString()
+
+      return contents
+    }
+
+    // These are "nested" {{ data.thing }}
+    if (data && node.typename === "LookupVal") {
+      contents.contents.value = `fields: ${node.fields}\n` + contents.contents.value
     }
 
     // if (node.typename === "Global" && definitions.globalFunctions[str]) {
