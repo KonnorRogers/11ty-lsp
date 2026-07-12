@@ -31,31 +31,11 @@ export async function getJSONData ({
     return
   }
 
-  let baseConfig = {
-    default: async (_eleventyConfig: any) => {},
-    config: {
-      dir: {
-      	input: ".",
-      	output: "_site",
-      }
-    }
-  }
-
-  const config = await import(configPath).catch(() => {
-    console.error("Unable to import your eleventy config.")
-  })
-
-  if (config) {
-    baseConfig = config
-  }
-
   // const input = baseConfig?.config?.dir || "."
   const eleventy = new Eleventy(undefined, output, {
     configPath,
     source: "cli",              // makes `output` override the config's dir.output
     config: async function(eleventyConfig: any) {
-      await baseConfig.default(eleventyConfig)
-
       // To grab all data.
       eleventyConfig.dataFilterSelectors.add("*");
     }
