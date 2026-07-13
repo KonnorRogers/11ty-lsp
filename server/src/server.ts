@@ -1,3 +1,5 @@
+import { logger, serializeError } from "./logger";
+
 import * as path from "node:path"
 import * as os from "node:os"
 import * as fs from "node:fs"
@@ -34,20 +36,86 @@ import { NunjucksCompletionProvider } from "./core/nunjucksCompletion";
 import { NunjucksValidator } from "./core/nunjucksValidator";
 import { NunjucksHoverProvider } from "./core/nunjucksHover";
 import { getJSONData } from "./core/getJSONData";
-import { logger } from "./logger";
+import { Diagnostic, DiagnosticSeverity } from "vscode-css-languageservice";
+import { DataOrError } from "./constants";
+
+const dataByConfig = new Map<string, DataOrError>();
 
 const RESTART_COMMAND = '11ty-lsp.restart';
 
-let data: Record<string, unknown>[] = [
-]
-let configPath = ""
+/**
+ * per-file data, this compares input keys from 11ty
+ */
+function getDataForFile(documentUri: string): DataOrError | undefined | null {
+  const data = getData(documentUri)
+  const filePath = fileURLToPath(documentUri);
+  const rootDir = findRootDir(filePath)
+
+  let relativePath = ""
+
+  let finalData: DataOrError | null = null
+  if (rootDir && !(data instanceof Error)) {
+    relativePath = path.relative(rootDir, filePath)
+    // Normalizes it to the same key as 11ty
+    const key = "./" + relativePath.split(path.sep).join("/")
+    if (Array.isArray(data)) {
+      finalData = data?.find?.((obj) => {
+        return obj.inputPath === key
+      })?.data || {}
+    }
+  }
+
+  return finalData
+}
+
+function getData(documentUri: string): DataOrError | undefined {
+  const config = findConfigForDocument(documentUri);
+
+  if (config) {
+    return dataByConfig.get(config)
+  }
+
+  return undefined;
+}
+
+function tmpDirFor(configPath: string) {
+  const hash = crypto.createHash("sha1").update(configPath).digest("hex").slice(0, 12);
+  return path.join(os.tmpdir(), "11ty-lsp-" + hash);
+}
+
+const rebuildTimers = new Map<string, NodeJS.Timeout>();
+
+async function rebuildConfig(configPath: string) {
+  dataByConfig.set(configPath, await getJSONData({ configPath, output: tmpDirFor(configPath) }));
+  for (const doc of documents.all()) {
+    if (findConfigForDocument(doc.uri) === configPath) {
+      await sendDiagnostics(doc);
+    }
+  }
+}
+
+function scheduleRebuild(document: TextDocument, delay = 300) {
+  clearTimeout(rebuildTimers.get(document.uri));
+  rebuildTimers.set(document.uri, setTimeout(() => {
+    rebuildTimers.delete(document.uri);
+    rebuildAndReport(document);
+  }, delay));
+}
+
+async function rebuildAndReport(document: TextDocument) {
+  const found = findConfigForDocument(document.uri);
+  if (found) {
+    await rebuildConfig(found)
+  }
+  await sendDiagnostics(document);     // send AFTER data is populated
+}
+
 
 const ROOT_MARKERS = [
   "eleventy.config.js", "eleventy.config.mjs", "eleventy.config.cjs",
   ".eleventy.js"
 ];
 
-const tmpFile = path.join(os.tmpdir(), "output-" + crypto.randomUUID())
 /** Closest ancestor of `startDir` containing any marker, or null. */
 function findRootDir(startDir: string, markers = ROOT_MARKERS) {
   const configFile = findRootConfigFile(startDir, markers)
@@ -83,35 +151,6 @@ function findConfigForDocument(documentUri: string): string | null {
   }
   return findRootConfigFile(path.dirname(filePath));
 }
-
-async function updateConfigForDocument(document: TextDocument): Promise<typeof data | null> {
-  const found = findConfigForDocument(document.uri);
-  if (found && found !== configPath) {
-    configPath = found;
-    data = await getJSONData({ configPath, output: tmpFile }).catch((e) => {
-      logger.write(e)
-    });
-
-    if (data) {
-      return data
-    }
-
-    return null
-  }
-
-  return null
-}
-
-
-process.on("uncaughtException", (e) => {
-  logger.write(e)
-})
-process.on("unhandledRejection", (e) => {
-  logger.write(e)
-})
-
-
-
 
 // Create a connection for the server, using Node's IPC as a transport.
 // Also include all preview / proposed LSP features.
@@ -279,12 +318,7 @@ connection.onExecuteCommand(async (params: ExecuteCommandParams) => {
 
 // The content of a text document has changed
 documents.onDidChangeContent(change => {
-  updateConfigForDocument(change.document).then((json) => {
-    if (json) {
-      data = json
-    }
-  });
-  sendDiagnostics(change.document);
+  scheduleRebuild(change.document);
 });
 
 // Watch for file changes that might require restart
@@ -326,7 +360,41 @@ async function getTextDocumentDiagnostics (textDocument: TextDocumentIdentifier)
       } satisfies DocumentDiagnosticReport;
     }
 
-    const diagnostics = nunjucksValidator.validate(document, settings);
+    // const diagnostics = nunjucksValidator.validate(document, settings);
+    const diagnostics: Diagnostic[] = [];
+
+    let data = getDataForFile(document.uri)
+
+    if (data == null) {
+      // no data found, check fallback to `getData()` and see if we have an error.
+      data = getData(document.uri)
+    }
+
+    if (data instanceof Error) {
+      // @ts-expect-error 11ty bakes it on "originalError"
+      const err = data.originalError;
+      const hasPos = ("lineno" in err && "colno" in err);
+
+      let range = {
+        start: { line: 1, character: 0 },
+        end: document.positionAt(document.getText().length),
+      }
+
+      if (hasPos) {
+        // const colno = (Number(err.colno) ?? 0)
+        // const lineno = (Number(err.lineno) ?? 0)
+        // range = {
+        //   start: { line: lineno, character: colno },
+        //   end:   { line: lineno, character: colno + 1 },
+        // }
+      }
+      diagnostics.push({
+        range,
+        message: `Error compiling 11ty: ` + JSON.stringify(serializeError(data), null, 2),
+        source: "[11ty-lsp]: 11ty CLI",
+        severity: DiagnosticSeverity.Error,
+      });
+    }
 
     return {
       kind: DocumentDiagnosticReportKind.Full,
@@ -368,22 +436,12 @@ connection.onHover(async (params): Promise<Hover | null> => {
     }
 
 
-    const filePath = fileURLToPath(document.uri);
+    let hoverData = getDataForFile(document.uri)
 
-    const rootDir = findRootDir(filePath)
-
-    let relativePath = ""
-    let hoverData = data
-    if (rootDir) {
-      relativePath = path.relative(rootDir, filePath)
-      // Normalizes it to the same key as 11ty
-      const key = "./" + relativePath.split(path.sep).join("/")
-      logger.write({key, relativePath})
-      // @ts-expect-error
-      hoverData = hoverData?.find?.((obj) => {
-        return obj.inputPath === key
-      })?.data || {}
+    if (hoverData instanceof Error) {
+      hoverData = {}
     }
+
     return nunjucksHoverProvider.provideHover(document, params.position, settings, hoverData);
   } catch (error) {
     connection.console.error(`Error in hover provider: ${error}`);

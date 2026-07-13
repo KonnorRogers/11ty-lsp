@@ -1,5 +1,6 @@
 import * as path from "node:path"
 import * as fs from "node:fs"
+import { DataError, DataOrError } from "../constants"
 
 function decycle(value: any, ancestors = new WeakSet()): any {
   if (value === null || typeof value !== "object") return value
@@ -20,15 +21,14 @@ export async function getJSONData ({
   configPath: string
   output: string
   // packageName: string
-}) {
+}): Promise<DataOrError> {
   let Eleventy = null
 
   try {
     // @ts-expect-error
     Eleventy = (await import("@11ty/eleventy")).default
   } catch {
-    console.error("Unable to find @11ty/eleventy")
-    return
+    return new Error("Unable to find @11ty/eleventy")
   }
 
   // const input = baseConfig?.config?.dir || "."
@@ -40,7 +40,13 @@ export async function getJSONData ({
       eleventyConfig.dataFilterSelectors.add("*");
     }
   });
-  const json = await eleventy.toJSON()
+  let json: Array<Record<string, unknown>> | {error: Error & { lineno?: number, colno?: number }} = []
+  try {
+    json = await eleventy.toJSON()
+  } catch(e) {
+    return e as DataError
+  }
+
   return json
 }
 

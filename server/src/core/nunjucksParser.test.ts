@@ -3,6 +3,7 @@ import assert from 'node:assert';
 
 import * as nodes from "nunjucks/src/nodes.js"
 import { NunjucksParser } from "./nunjucksParser"
+import { NEW_LINE } from "../constants";
 
 test("Should properly find a symbol", () => {
   const parser = new NunjucksParser({})
@@ -30,7 +31,7 @@ test("Should properly find a target a lineno + colno", () => {
   const { ast } = parser.parseContent(content)
 
   const line = 2 // lines are 1-indexed apparently.
-  const rangeForFirst = content.split("\n")[line - 1]
+  const rangeForFirst = content.split(NEW_LINE)[line - 1]
   const characterStart = rangeForFirst.search("first")
   const characterEnd = characterStart + "first".length
 
