@@ -1,5 +1,6 @@
 import * as path from "node:path"
 import * as fs from "node:fs"
+import { getEleventyRuntime } from "./eleventy-runtime"
 import { DataError, DataOrError } from "../constants"
 
 function decycle(value: any, ancestors = new WeakSet()): any {
@@ -14,40 +15,27 @@ function decycle(value: any, ancestors = new WeakSet()): any {
   return out
 }
 
-export async function getJSONData ({
-  configPath,
-  output,
-}: {
-  configPath: string
-  output: string
-  // packageName: string
-}): Promise<DataOrError> {
-  let Eleventy = null
+const RESOURCE_MODIFIED_EVENTS = [
+  "buildawesome.resourcemodified", // 11ty 4.x (canary)
+  "eleventy.resourceModified",     // 11ty 3.x
+];
 
-  try {
-    // @ts-expect-error
-    Eleventy = (await import("@11ty/eleventy")).default
-  } catch {
-    return new Error("Unable to find @11ty/eleventy")
+export async function getJSONData({ configPath, output, invalidate = [] }:
+  { configPath: string; output: string; invalidate?: string[] }): Promise<DataOrError> {
+  let rt;
+  try { rt = await getEleventyRuntime(path.dirname(configPath)); }
+  catch (e) { return new Error("Unable to find @11ty/eleventy: " + (e as Error).message); }
+
+  for (const p of invalidate) {
+    for (const ev of RESOURCE_MODIFIED_EVENTS) rt.eventBus.emit(ev, p);
   }
 
-  // const input = baseConfig?.config?.dir || "."
-  const eleventy = new Eleventy(undefined, output, {
-    configPath,
-    source: "cli",              // makes `output` override the config's dir.output
-    config: async function(eleventyConfig: any) {
-      // To grab all data.
-      eleventyConfig.dataFilterSelectors.add("*");
-    }
+  const eleventy = new rt.Eleventy(undefined, output, {
+    configPath, source: "cli",
+    config: async (c: any) => { c.dataFilterSelectors.add("*"); },
   });
-  let json: Array<Record<string, unknown>> | {error: Error & { lineno?: number, colno?: number }} = []
-  try {
-    json = await eleventy.toJSON()
-  } catch(e) {
-    return e as DataError
-  }
-
-  return json
+  try { return await eleventy.toJSON(); }
+  catch (e) { return e as DataError; }
 }
 
 export async function writeJSONData ({

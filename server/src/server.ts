@@ -36,7 +36,7 @@ import { NunjucksCompletionProvider } from "./core/nunjucksCompletion";
 import { NunjucksValidator } from "./core/nunjucksValidator";
 import { NunjucksHoverProvider } from "./core/nunjucksHover";
 import { getJSONData } from "./core/getJSONData";
-import { Diagnostic, DiagnosticSeverity } from "vscode-css-languageservice";
+import { DiagnosticSeverity } from "vscode-css-languageservice";
 import { DataOrError } from "./constants";
 
 const dataByConfig = new Map<string, DataOrError>();
@@ -85,8 +85,8 @@ function tmpDirFor(configPath: string) {
 
 const rebuildTimers = new Map<string, NodeJS.Timeout>();
 
-async function rebuildConfig(configPath: string) {
-  dataByConfig.set(configPath, await getJSONData({ configPath, output: tmpDirFor(configPath) }));
+async function rebuildConfig(configPath: string, invalidate: string[] = []) {
+  dataByConfig.set(configPath, await getJSONData({ configPath, output: tmpDirFor(configPath), invalidate }));
   for (const doc of documents.all()) {
     if (findConfigForDocument(doc.uri) === configPath) {
       await sendDiagnostics(doc);
@@ -105,12 +105,10 @@ function scheduleRebuild(document: TextDocument, delay = 300) {
 async function rebuildAndReport(document: TextDocument) {
   const found = findConfigForDocument(document.uri);
   if (found) {
-    await rebuildConfig(found)
-    logger.write({ event: "rebuildingConfig" })
+    await rebuildConfig(found, [fileURLToPath(document.uri)]);
   }
-  await sendDiagnostics(document);     // send AFTER data is populated
+  await sendDiagnostics(document);
 }
-
 
 const ROOT_MARKERS = [
   "eleventy.config.js", "eleventy.config.mjs", "eleventy.config.cjs",
@@ -319,7 +317,10 @@ connection.onExecuteCommand(async (params: ExecuteCommandParams) => {
 
 // The content of a text document has changed
 documents.onDidChangeContent(change => {
-  logger.write({ event: "contentChange" })
+  scheduleRebuild(change.document);
+});
+
+documents.onDidSave(change => {
   scheduleRebuild(change.document);
 });
 
@@ -382,6 +383,7 @@ async function getTextDocumentDiagnostics (textDocument: TextDocumentIdentifier)
       }
 
       if (hasPos) {
+        // 11ty reports kind of useless numbers.
         // const colno = (Number(err.colno) ?? 0)
         // const lineno = (Number(err.lineno) ?? 0)
         // range = {
@@ -389,12 +391,12 @@ async function getTextDocumentDiagnostics (textDocument: TextDocumentIdentifier)
         //   end:   { line: lineno, character: colno + 1 },
         // }
       }
-      // diagnostics.push({
-      //   range,
-      //   message: `Error compiling 11ty: ` + JSON.stringify(serializeError(data), null, 2),
-      //   source: "[11ty-lsp]: 11ty CLI",
-      //   severity: DiagnosticSeverity.Error,
-      // });
+      diagnostics.push({
+        range,
+        message: `Error compiling 11ty: ` + JSON.stringify(serializeError(data), null, 2),
+        source: "[11ty-lsp]: 11ty CLI",
+        severity: DiagnosticSeverity.Error,
+      });
     }
 
     return {
