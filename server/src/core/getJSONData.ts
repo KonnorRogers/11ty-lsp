@@ -22,20 +22,30 @@ const RESOURCE_MODIFIED_EVENTS = [
 
 export async function getJSONData({ configPath, output, invalidate = [] }:
   { configPath: string; output: string; invalidate?: string[] }): Promise<DataOrError> {
-  let rt;
-  try { rt = await getEleventyRuntime(path.dirname(configPath)); }
-  catch (e) { return new Error("Unable to find @11ty/eleventy: " + (e as Error).message); }
-
-  for (const p of invalidate) {
-    for (const ev of RESOURCE_MODIFIED_EVENTS) rt.eventBus.emit(ev, p);
+  let eleventyRuntime;
+  try {
+    eleventyRuntime = await getEleventyRuntime(path.dirname(configPath));
+  }
+  catch (e) {
+    return new Error("Unable to find @11ty/eleventy: " + (e as Error).message);
   }
 
-  const eleventy = new rt.Eleventy(undefined, output, {
+  // This relies on some serious 11ty internals to invalidate its cache.
+  for (const p of invalidate) {
+    for (const ev of RESOURCE_MODIFIED_EVENTS) {
+      eleventyRuntime.eventBus.emit(ev, p);
+    }
+  }
+
+  const eleventy = new eleventyRuntime.Eleventy(undefined, output, {
     configPath, source: "cli",
     config: async (c: any) => { c.dataFilterSelectors.add("*"); },
   });
-  try { return await eleventy.toJSON(); }
-  catch (e) { return e as DataError; }
+  try {
+    return await eleventy.toJSON();
+  } catch (e) {
+    return e as DataError;
+  }
 }
 
 export async function writeJSONData ({

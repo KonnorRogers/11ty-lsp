@@ -12,7 +12,9 @@ function pkgDirFor(projectDir: string): string {
   let dir = path.dirname(req.resolve("@11ty/eleventy"));
   while (dir !== path.dirname(dir)) {
     const pj = path.join(dir, "package.json");
-    if (fs.existsSync(pj) && JSON.parse(fs.readFileSync(pj, "utf8")).name === "@11ty/eleventy") return dir;
+    if (fs.existsSync(pj) && JSON.parse(fs.readFileSync(pj, "utf8")).name === "@11ty/eleventy") {
+      return dir;
+    }
     dir = path.dirname(dir);
   }
   throw new Error("Could not locate @11ty/eleventy from " + projectDir);
