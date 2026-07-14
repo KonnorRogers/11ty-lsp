@@ -106,6 +106,7 @@ async function rebuildAndReport(document: TextDocument) {
   const found = findConfigForDocument(document.uri);
   if (found) {
     await rebuildConfig(found)
+    logger.write({ event: "rebuildingConfig" })
   }
   await sendDiagnostics(document);     // send AFTER data is populated
 }
@@ -318,6 +319,7 @@ connection.onExecuteCommand(async (params: ExecuteCommandParams) => {
 
 // The content of a text document has changed
 documents.onDidChangeContent(change => {
+  logger.write({ event: "contentChange" })
   scheduleRebuild(change.document);
 });
 
@@ -360,8 +362,7 @@ async function getTextDocumentDiagnostics (textDocument: TextDocumentIdentifier)
       } satisfies DocumentDiagnosticReport;
     }
 
-    // const diagnostics = nunjucksValidator.validate(document, settings);
-    const diagnostics: Diagnostic[] = [];
+    const diagnostics = nunjucksValidator.validate(document, settings);
 
     let data = getDataForFile(document.uri)
 
@@ -388,12 +389,12 @@ async function getTextDocumentDiagnostics (textDocument: TextDocumentIdentifier)
         //   end:   { line: lineno, character: colno + 1 },
         // }
       }
-      diagnostics.push({
-        range,
-        message: `Error compiling 11ty: ` + JSON.stringify(serializeError(data), null, 2),
-        source: "[11ty-lsp]: 11ty CLI",
-        severity: DiagnosticSeverity.Error,
-      });
+      // diagnostics.push({
+      //   range,
+      //   message: `Error compiling 11ty: ` + JSON.stringify(serializeError(data), null, 2),
+      //   source: "[11ty-lsp]: 11ty CLI",
+      //   severity: DiagnosticSeverity.Error,
+      // });
     }
 
     return {
