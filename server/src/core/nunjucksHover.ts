@@ -89,27 +89,46 @@ export class NunjucksHoverProvider {
     if (!word) { return null }
 
     // Parse the whole line so we can get a better AST representation, then we'll walk back to the AST to the position.character.
-    const content = previousContent + "\n" + currentLineContent
+    let content = previousContent + "\n" + currentLineContent
 
     // do we need to parse??
-    const result = this.parser.parseContent(content)
-    let currentNode = this.parser.findNodeInRange(result.ast, word.range)
+    let result = this.parser.parseContent(content)
+    let currentNode = this.parser.findNodeInRange(result.ast, {
+      start: {
+        // these ranges are off by 1 from Nunjucks parsing yayyy...
+        line: word.range.start.line + 1,
+        character: word.range.start.character,
+      },
+      end: {
+        line: word.range.end.line + 1,
+        character: word.range.end.character,
+      }
+    })
 
     if (!currentNode) {
       // Walk back more. Go to start / end of line.
+      result = this.parser.parseDocument(document)
       currentNode = this.parser.findNodeInRange(result.ast, {
         start: {
-          line: word.range.start.line,
+          line: position.line + 1,
           character: 0,
         },
         end: {
-          line: word.range.end.line + 1,
-          character: 0,
+          line: position.line + 1,
+          character: currentLineContent.length - 1,
         }
       })
+
+      if (!currentNode) {
+        logger.write({
+          char: position.character,
+          line: position.line,
+          currentLineContent,
+          parser: this.parser.parseDocument(document)
+        })
+      }
     }
 
-    logger.write({currentNode})
 
     const hover = this.wordToHoverDocumentationForNode(currentNode, word, data);
 
