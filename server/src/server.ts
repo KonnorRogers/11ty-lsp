@@ -1,4 +1,5 @@
 import { logger, serializeError } from "./logger";
+import * as lexer from "nunjucks/src/lexer.js"
 
 import * as path from "node:path"
 import * as os from "node:os"
@@ -42,7 +43,13 @@ import { DataOrError } from "./constants";
 const dataByConfig = new Map<string, DataOrError>();
 
 const RESTART_COMMAND = '11ty-lsp.restart';
+const name = "11ty-lsp"
 
+const packageData = JSON.parse(fs.readFileSync(path.resolve(__dirname, "..", "..", "package.json"), { encoding: "utf-8" }))
+const packageName = packageData.name
+const packageVersion = packageData.version
+
+logger.write({ packageName, packageVersion })
 /**
  * per-file data, this compares input keys from 11ty
  */
@@ -86,9 +93,17 @@ function tmpDirFor(configPath: string) {
 const rebuildTimers = new Map<string, NodeJS.Timeout>();
 
 async function rebuildConfig(configPath: string, invalidate: string[] = []) {
-  dataByConfig.set(configPath, await getJSONData({ configPath, output: tmpDirFor(configPath), invalidate }));
+  const data = await getJSONData({ configPath, output: tmpDirFor(configPath), invalidate })
+
+  if (Array.isArray(data)) {
+    // logger.write(data[0].data.eleventy)
+  }
+
+  dataByConfig.set(configPath, data);
+
   for (const doc of documents.all()) {
-    if (findConfigForDocument(doc.uri) === configPath) {
+    const config = findConfigForDocument(doc.uri)
+    if (config === configPath) {
       await sendDiagnostics(doc);
     }
   }
@@ -188,7 +203,7 @@ const documentSettings: Map<string, Thenable<NunjucksSettings>> = new Map();
 
 async function restartServer () {
   try {
-    connection.console.log('Restarting Nunjucks LSP server...');
+    connection.console.log(`Restarting ${name} server...`);
 
     // Clear document settings cache
     documentSettings.clear();
@@ -211,13 +226,13 @@ async function restartServer () {
       await sendDiagnostics(doc);
     }
 
-    connection.console.log('Nunjucks LSP server restarted successfully');
+    connection.console.log(`${name} server restarted successfully`);
 
     // Show info message to user
-    connection.window.showInformationMessage('Nunjucks LSP server has been restarted');
+    connection.window.showInformationMessage(`${name} server has been restarted`);
   } catch (error) {
     connection.console.error(`Error during server restart: ${error}`);
-    connection.window.showErrorMessage(`Failed to restart Nunjucks LSP server: ${error}`);
+    connection.window.showErrorMessage(`Failed to restart ${name} server: ${error}`);
   }
 }
 
@@ -250,8 +265,9 @@ connection.onInitialize((params: InitializeParams) => {
       textDocumentSync: TextDocumentSyncKind.Incremental,
       completionProvider: {
         resolveProvider: true,
-        // TODO: update to use the lexer completion chars.
-        triggerCharacters: ['.', '|', '{', '%', '#']
+        triggerCharacters: [
+          '.', '|', '{%', '(', '{{'
+        ]
       },
       hoverProvider: true,
       diagnosticProvider: {
@@ -264,8 +280,8 @@ connection.onInitialize((params: InitializeParams) => {
       }
     },
     serverInfo: {
-      name: "11ty-lsp",
-      version: "0.1.0"
+      name: packageName,
+      version: packageVersion
     }
   };
 

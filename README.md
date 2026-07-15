@@ -117,13 +117,15 @@ Note that you can package and distribute a standalone `.vsix` file without publi
 local server_name = "11ty-lsp"
 local server_path = vim.fn.expand("$HOME/projects/oss/" .. server_name .. "/server/out/server.js")
 
-vim.lsp.config(server_name, {
-  cmd = { "node", server_path, "--stdio" },   -- no stray '--'
-  filetypes = { "html", "liquid", "markdown", "njk", "nunjucks", "javascript" },
-  root_markers = {
-    "eleventy.config.js", "eleventy.config.mjs", "eleventy.config.cjs",
-    ".eleventy.js", "package.json", ".git",
-  },
+local root_markers = {
+  "eleventy.config.js", "eleventy.config.mjs", "eleventy.config.cjs",
+  ".eleventy.js", "package.json", ".git",
+}
+
+local cfg = {
+  cmd = { "node", server_path, "--stdio" },
+  filetypes = { "jinja", "html", "liquid", "markdown", "njk", "nunjucks", "javascript" },
+  root_markers = root_markers,
   init_options = {
     maxNumberOfProblems = 1000,
     enabledFeatures = { completion = true, diagnostics = true, hover = true },
@@ -134,8 +136,35 @@ vim.lsp.config(server_name, {
       enabledFeatures = { completion = true, diagnostics = true, hover = true },
     },
   },
-})
+}
 
+vim.lsp.config(server_name, cfg)
+vim.lsp.enable(server_name)
+
+-- Attach for template buffers. Autocmd patterns match the FULL &filetype string,
+-- so a dotted "jinja.html" won't match a bare "jinja" pattern — we split it ourselves,
+-- the same way ftplugin/syntax loaders handle dotted filetypes.
+vim.api.nvim_create_autocmd("FileType", {
+  callback = function(args)
+    local ft = vim.bo[args.buf].filetype
+    local is_template = false
+    for part in vim.gsplit(ft, ".", { plain = true }) do
+      if part == "jinja" or part == "njk" or part == "nunjucks" then
+        is_template = true
+        break
+      end
+    end
+    if not is_template then return end
+
+    vim.lsp.start(
+      vim.tbl_extend("force", cfg, {
+        name = server_name,
+        root_dir = vim.fs.root(args.buf, root_markers),
+      }),
+      { bufnr = args.buf }
+    )
+  end,
+})
 
 vim.api.nvim_create_autocmd("LspAttach", {
   callback = function(args)
@@ -146,13 +175,4 @@ vim.api.nvim_create_autocmd("LspAttach", {
   end,
 })
 
-vim.lsp.enable(server_name)
-
--- Optional: Add filetype detection for .njk files
-vim.api.nvim_create_autocmd({"BufRead", "BufNewFile"}, {
-  pattern = {"*.njk", "*.nunjucks"},
-  callback = function()
-    vim.bo.filetype = "nunjucks"
-  end
-})
 ```
