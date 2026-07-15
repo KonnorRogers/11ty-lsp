@@ -27,13 +27,14 @@ export class NunjucksValidator {
 
     const hasPos = result.error.lineno != null && result.error.colno != null
 
+    // nunjucks lines + chars are all 1-indexed so we need to subtract 1.
     const startLine = hasPos ? result.error.lineno - 1 : 0
-    const startChar = hasPos ? result.error.colno : 0
+    const startChar = hasPos ? result.error.colno - 1 : 0
     const endLine = hasPos ? result.error.lineno - 1 : finalLine
-    const endChar = hasPos ? result.error.colno + 1 : finalChar
+    const endChar = hasPos ? result.error.colno : finalChar
 
     diagnostics.push({
-      message: result.error.message,
+      message: "Nunjucks parsing error: " + result.error.message,
       range: {
         start: {
           line: startLine,

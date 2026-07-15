@@ -101,12 +101,13 @@ async function rebuildConfig(configPath: string, invalidate: string[] = []) {
 
   dataByConfig.set(configPath, data);
 
-  for (const doc of documents.all()) {
-    const config = findConfigForDocument(doc.uri)
-    if (config === configPath) {
-      await sendDiagnostics(doc);
-    }
-  }
+  // The freshly-rebuilt data is now in the cache. Ask the client to re-pull
+  // diagnostics so the pull provider recomputes against it. We must NOT use the
+  // push model (connection.sendDiagnostics) here: since we advertise
+  // `diagnosticProvider`, the client manages diagnostics via the pull model, and
+  // pushed diagnostics live in a separate collection that can't clear a
+  // pull-provided result (that's why stale errors lingered until reopen).
+  connection.languages.diagnostics.refresh();
 }
 
 function scheduleRebuild(document: TextDocument, delay = 300) {
@@ -120,9 +121,13 @@ function scheduleRebuild(document: TextDocument, delay = 300) {
 async function rebuildAndReport(document: TextDocument) {
   const found = findConfigForDocument(document.uri);
   if (found) {
+    // rebuildConfig refreshes diagnostics once the cache is updated.
     await rebuildConfig(found, [fileURLToPath(document.uri)]);
+  } else {
+    // No 11ty config: nothing to rebuild, but the document's own validation may
+    // have changed, so still ask the client to re-pull.
+    connection.languages.diagnostics.refresh();
   }
-  await sendDiagnostics(document);
 }
 
 const ROOT_MARKERS = [
@@ -239,11 +244,8 @@ async function restartServer () {
     nunjucksValidator = new NunjucksValidator(parser);
     nunjucksHoverProvider = new NunjucksHoverProvider(parser);
 
-    // Revalidate all open documents
-    const allDocs = documents.all();
-    for (const doc of allDocs) {
-      await sendDiagnostics(doc);
-    }
+    // Revalidate all open documents by asking the client to re-pull.
+    connection.languages.diagnostics.refresh();
 
     connection.console.log(`${name} server restarted successfully`);
 
@@ -376,13 +378,6 @@ connection.onDidChangeWatchedFiles(async (params) => {
 
   if (needsRestart) {
     await restartServer();
-  } else {
-    // if (configPath) {
-    //   data = updateJSONData({
-    //     configPath,
-    //     output: tmpFile
-    //   })
-    // }
   }
 });
 
@@ -412,13 +407,14 @@ async function getTextDocumentDiagnostics (textDocument: TextDocumentIdentifier)
       const err = data.originalError;
       const hasPos = ("lineno" in err && "colno" in err);
 
+      // TODO: Unsure if its better to highlight whole file, or just the first char + line. Whole file makes it obvious your 11ty build is broken.
       let range = {
-        start: { line: 1, character: 0 },
+        start: { line: 0, character: 0 },
         end: document.positionAt(document.getText().length),
       }
 
       if (hasPos) {
-        // 11ty reports kind of useless numbers.
+        // 11ty reports kind of useless numbers. So we ignore it.
         // const colno = (Number(err.colno) ?? 0)
         // const lineno = (Number(err.lineno) ?? 0)
         // range = {
@@ -426,7 +422,7 @@ async function getTextDocumentDiagnostics (textDocument: TextDocumentIdentifier)
         //   end:   { line: lineno, character: colno + 1 },
         // }
       }
-      diagnostics.push({
+      diagnostics.unshift({
         range,
         message: `Error compiling 11ty: ` + JSON.stringify(serializeError(data), null, 2),
         source: "[11ty-lsp]: 11ty CLI",
@@ -446,17 +442,6 @@ async function getTextDocumentDiagnostics (textDocument: TextDocumentIdentifier)
   }
 }
 
-async function sendDiagnostics(textDocument: TextDocument): Promise<void> {
-  try {
-    const diagnostics = await getTextDocumentDiagnostics(textDocument)
-    // Send the computed diagnostics to VSCode
-    connection.sendDiagnostics({ uri: textDocument.uri, diagnostics: diagnostics.items });
-  } catch (error) {
-    connection.console.error(`Error validating document ${textDocument.uri}: ${error}`);
-    // Send empty diagnostics on error to clear any existing ones
-    connection.sendDiagnostics({ uri: textDocument.uri, diagnostics: [] });
-  }
-}
 
 
 // Hover provider

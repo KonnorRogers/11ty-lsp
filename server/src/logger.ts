@@ -6,7 +6,7 @@ const home = os.homedir()
 const debugFile = path.join(home, "debug.log")
 const writeStream = fs.createWriteStream(debugFile)
 
-export function serializeError(e: unknown) {
+export function serializeError(e: unknown): Record<string, unknown> | unknown {
   if (e instanceof Error) {
     let originalError = {}
     // @ts-expect-error
@@ -14,14 +14,16 @@ export function serializeError(e: unknown) {
       // @ts-expect-error
       originalError = serializeError(e.originalError)
     }
+
     return {
       name: e.name,
       message: e.message,
+      // put originalError first since it tends to have the better info than the stack trace.
+      ...(originalError ? {originalError: serializeError(originalError)} : {}),
       stack: e.stack,
-      ...(originalError ? {originalError} : {})
     };
   }
-  return { value: e };
+  return e;
 }
 
 export class Logger {

@@ -179,3 +179,6 @@ vim.api.nvim_create_autocmd("LspAttach", {
 ## Known issues
 
 - Editor will not run 11ty until you save to determine if there's a compiler problem. (Without a virtual file system, not sure a way around this)
+- Currently only supports nunjucks templates
+- Does not currently support custom short codes
+- Does not support custom delimitiers and other modified nunjucks parsing behavior
