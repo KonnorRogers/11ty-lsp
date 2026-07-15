@@ -10,6 +10,7 @@ import { NunjucksParser } from './nunjucksParser';
 import { NunjucksSettings } from '../settings/nunjucksSettings';
 import { getContext } from './getContext';
 import * as definitions from './definitions'
+import { DataOrError } from '../constants';
 
 export class NunjucksCompletionProvider {
   constructor(private parser: NunjucksParser) {}
@@ -18,7 +19,7 @@ export class NunjucksCompletionProvider {
     document: TextDocument,
     position: Position,
     settings: NunjucksSettings,
-    data: Record<string, unknown>
+    data?: DataOrError | null
   ): CompletionItem[] {
     const {
       previousContent,

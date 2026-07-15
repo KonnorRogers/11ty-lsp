@@ -81,30 +81,35 @@ export class NunjucksHoverProvider {
     const {
       previousContent,
       currentLineContent,
-      contentBeforeOffset,
+      // contentBeforeOffset,
     } = getContext(document, position.line, position.character);
 
     const word = this.getWordAtCursor(currentLineContent, position.character, position.line);
 
     if (!word) { return null }
 
-
-    // const contentBeforeHoveredWord = this.sliceLine(contentBeforeOffset, word.range)
     // Parse the whole line so we can get a better AST representation, then we'll walk back to the AST to the position.character.
     const content = previousContent + "\n" + currentLineContent
 
-    // fs.writeFileSync("/Users/konnorrogers/debug.log", content)
     // do we need to parse??
     const result = this.parser.parseContent(content)
+    let currentNode = this.parser.findNodeInRange(result.ast, word.range)
 
-    const currentNode = this.parser.findNodeInRange(result.ast, word.range)
+    if (!currentNode) {
+      // Walk back more. Go to start / end of line.
+      currentNode = this.parser.findNodeInRange(result.ast, {
+        start: {
+          line: word.range.start.line,
+          character: 0,
+        },
+        end: {
+          line: word.range.end.line + 1,
+          character: 0,
+        }
+      })
+    }
 
-    // if (result.error) {
-    //   // Just blindly try to get a hover word
-    //   const hover = this.wordToHoverDocumentation(word);
-    //   return hover
-    // }
-
+    logger.write({currentNode})
 
     const hover = this.wordToHoverDocumentationForNode(currentNode, word, data);
 
@@ -191,9 +196,8 @@ export class NunjucksHoverProvider {
     //   return contents
     // }
     // contents.contents.value = node.typename + ": " + str + "\n\n"
-    // const debug = JSON.stringify(node, null, 2)
-    // contents.contents.value = `nodeType: ${node.typename}\n\n${debug}`
-    contents.contents.value = `nodeType: ${node.typename}`
+    const debug = JSON.stringify(node, null, 2)
+    contents.contents.value = `nodeType: ${node.typename}\n\n${debug}`
 
     if (node.typename === "Filter" && definitions.filters[str]) {
       const documentation = definitions.filters[str]?.documentation as string
