@@ -1,5 +1,4 @@
 import { logger, serializeError } from "./logger";
-import * as lexer from "nunjucks/src/lexer.js"
 import { ELEVENTY_OR_BUILDAWESOME_PACKAGES } from "./constants";
 
 import * as path from "node:path"

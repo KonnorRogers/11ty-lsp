@@ -7,11 +7,20 @@ const debugFile = path.join(home, "debug.log")
 const writeStream = fs.createWriteStream(debugFile)
 
 export function serializeError(e: unknown) {
-  if (e instanceof Error) return {
-    name: e.name,
-    message: e.message,
-    stack: e.stack
-  };
+  if (e instanceof Error) {
+    let originalError = {}
+    // @ts-expect-error
+    if (e.originalError) {
+      // @ts-expect-error
+      originalError = serializeError(e.originalError)
+    }
+    return {
+      name: e.name,
+      message: e.message,
+      stack: e.stack,
+      ...(originalError ? {originalError} : {})
+    };
+  }
   return { value: e };
 }
 
