@@ -8,3 +8,9 @@ export type DataOrError =
 
 export type DataError = Error & { lineno?: number; colno?: number }
 
+
+export const ELEVENTY_OR_BUILDAWESOME_PACKAGES = [
+  "@11ty/eleventy",
+  "@awesome.me/buildawesome"
+]
+

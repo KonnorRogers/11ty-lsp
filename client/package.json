@@ -1,7 +1,7 @@
 {
-  "name": "webawesome-lsp-client",
-  "description": "REPLACE_ME",
-  "author": "REPLACE_ME",
+  "name": "11ty-lsp-client",
+  "description": "LSP client for 11ty",
+  "author": "Konnor Rogers <konnor5456@gmail.com>",
   "license": "MIT",
   "version": "0.0.1",
   "publisher": "REPLACE_ME",

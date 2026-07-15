@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { patchEleventyStarSelector } from "./patch-eleventy-runtime";
+import { ELEVENTY_OR_BUILDAWESOME_PACKAGES } from "../constants";
 
 type Runtime = { Eleventy: any; eventBus: any };
 const cache = new Map<string, Promise<Runtime>>();
@@ -12,14 +13,26 @@ const cache = new Map<string, Promise<Runtime>>();
 function pkgDirFor(projectDir: string): string {
   const req = createRequire(pathToFileURL(path.join(projectDir, "package.json")));
   let dir = path.dirname(req.resolve("@11ty/eleventy"));
+
+  if (!dir) {
+    // Just in case, check for build awesome.
+    dir = path.dirname(req.resolve("@awesome.me/buildawesome"));
+  }
+
+  logger.write({dir})
+
+  // Search upwards to find the package.json
   while (dir !== path.dirname(dir)) {
     const pj = path.join(dir, "package.json");
-    if (fs.existsSync(pj) && JSON.parse(fs.readFileSync(pj, "utf8")).name === "@11ty/eleventy") {
-      return dir;
+    if (fs.existsSync(pj)) {
+      const name = JSON.parse(fs.readFileSync(pj, "utf8")).name
+      if (ELEVENTY_OR_BUILDAWESOME_PACKAGES.includes(name)) {
+        return dir;
+      }
     }
     dir = path.dirname(dir);
   }
-  throw new Error("Could not locate @11ty/eleventy from " + projectDir);
+  throw new Error("Could not locate \"@11ty/eleventy\" or \"@awesome.me/buildawesome\" from " + projectDir);
 }
 
 export function getEleventyRuntime(projectDir: string): Promise<Runtime> {
@@ -32,7 +45,7 @@ export function getEleventyRuntime(projectDir: string): Promise<Runtime> {
       const isV3 = pkg.version.startsWith("3.")
       const eleventyPath = pathToFileURL(esm).href
       const Eleventy = (await import(eleventyPath)).default;
-      logger.write({version: pkg.version})
+      // logger.write({version: pkg.version})
       if (isV3) {
         await patchEleventyStarSelector(eleventyPath)
       }

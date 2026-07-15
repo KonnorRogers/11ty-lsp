@@ -9,8 +9,7 @@
     "vscode": "^1.75.0"
   },
   "activationEvents": [
-    "onLanguage:*",
-    "onStartupFinished"
+    "onLanguage:plaintext"
   ],
   "main": "./client/out/vscode",
   "scripts": {

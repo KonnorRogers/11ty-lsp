@@ -17,7 +17,8 @@ export class NunjucksCompletionProvider {
   provideCompletions(
     document: TextDocument,
     position: Position,
-    settings: NunjucksSettings
+    settings: NunjucksSettings,
+    data: Record<string, unknown>
   ): CompletionItem[] {
     const {
       previousContent,

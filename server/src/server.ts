@@ -1,5 +1,6 @@
 import { logger, serializeError } from "./logger";
 import * as lexer from "nunjucks/src/lexer.js"
+import { ELEVENTY_OR_BUILDAWESOME_PACKAGES } from "./constants";
 
 import * as path from "node:path"
 import * as os from "node:os"
@@ -127,7 +128,7 @@ async function rebuildAndReport(document: TextDocument) {
 
 const ROOT_MARKERS = [
   "eleventy.config.js", "eleventy.config.mjs", "eleventy.config.cjs",
-  ".eleventy.js"
+  ".eleventy.js", "package.json"
 ];
 
 /** Closest ancestor of `startDir` containing any marker, or null. */
@@ -145,7 +146,26 @@ function findRootConfigFile(startDir: string, markers = ROOT_MARKERS): string | 
   const { root } = path.parse(dir); // "/" or "C:\\"
 
   while (true) {
-    const marker = markers.find((m) => fs.existsSync(path.join(dir, m)));
+    const marker = markers.find((m) => {
+      const filePath = path.join(dir, m)
+      if (m === "package.json") {
+        // We need to check if the package.json contains 11ty.
+        if (fs.existsSync(filePath)) {
+          const pkgData = JSON.parse(fs.readFileSync(filePath, { encoding: "utf8" }))
+          const dependencies = Object.keys(pkgData.dependencies || {})
+                                  .concat(Object.keys(pkgData.devDependencies || {}))
+
+          return dependencies.some((dep: string) => {
+            return ELEVENTY_OR_BUILDAWESOME_PACKAGES.includes(dep)
+          })
+        }
+
+        return false
+      }
+
+      return fs.existsSync(filePath)
+    });
+
     if (marker) {
       return path.join(dir, marker); // full path, not just the filename
     }
@@ -498,7 +518,8 @@ connection.onCompletion(async (textDocumentPosition: TextDocumentPositionParams)
     return [];
   }
 
-  return nunjucksCompletionProvider.provideCompletions(document, textDocumentPosition.position, settings);
+  const data = getDataForFile(document.uri)
+  return nunjucksCompletionProvider.provideCompletions(document, textDocumentPosition.position, settings, data);
 });
 
 // Completion resolve provider

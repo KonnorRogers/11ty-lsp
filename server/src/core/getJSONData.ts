@@ -2,6 +2,7 @@ import * as path from "node:path"
 import * as fs from "node:fs"
 import { getEleventyRuntime } from "./eleventy-runtime"
 import { DataError, DataOrError } from "../constants"
+import { logger } from "../logger"
 
 function decycle(value: any, ancestors = new WeakSet()): any {
   if (value === null || typeof value !== "object") return value
@@ -27,7 +28,7 @@ export async function getJSONData({ configPath, output, invalidate = [] }:
     eleventyRuntime = await getEleventyRuntime(path.dirname(configPath));
   }
   catch (e) {
-    return new Error("Unable to find @11ty/eleventy: " + (e as Error).message);
+    return new Error("Unable to find @11ty/eleventy or @awesome.me/buildawesome: " + (e as Error).message);
   }
 
   // This relies on some serious 11ty internals to invalidate its cache.
@@ -37,10 +38,23 @@ export async function getJSONData({ configPath, output, invalidate = [] }:
     }
   }
 
-  const eleventy = new eleventyRuntime.Eleventy(undefined, output, {
-    configPath, source: "cli",
+  const options = {
+    source: "cli",
+    // This is the crux of everything and gives us the data for every input file.
     config: async (c: any) => { c.dataFilterSelectors.add("*"); },
-  });
+    configPath
+  }
+
+  let eleventy = null
+
+  if (!configPath) {
+    // Without this fallback config, 11ty fails to start.
+    const baseConfigPath = path.resolve(__dirname, "base-eleventy-config.js")
+    options.configPath = baseConfigPath
+  }
+
+  eleventy = new eleventyRuntime.Eleventy(undefined, output, options);
+
   try {
     return await eleventy.toJSON();
   } catch (e) {

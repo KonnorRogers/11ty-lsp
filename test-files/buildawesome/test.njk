@@ -1,0 +1,47 @@
+---
+foo: "bar"
+bar: "baz"
+obj:
+  a: "A"
+  b: "B"
+  c: "C"
+items:
+  - "Apples"
+  - "Bananas"
+  - "Oatmeal"
+---
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title></title>
+  </head>
+  <body>
+    {{ foo }}
+    {{ foo }}
+
+    {{ foo | first }}
+
+    {{ foo }}
+
+    {{ bar }}
+
+    {{ obj }}
+    {{ obj.a.b.c.d }}
+    {{ obj.b }}
+    {{ obj.c }}
+
+    {{ page }}
+
+    {{ page }}
+
+    {{ items }}
+
+    {{ eleventy }}
+
+    {% for item in items %}
+      {{ item }}
+    {% endfor %}
+  </body>
+</html>

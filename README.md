@@ -174,5 +174,8 @@ vim.api.nvim_create_autocmd("LspAttach", {
     end
   end,
 })
-
 ```
+
+## Known issues
+
+- Editor will not run 11ty until you save to determine if there's a compiler problem. (Without a virtual file system, not sure a way around this)
