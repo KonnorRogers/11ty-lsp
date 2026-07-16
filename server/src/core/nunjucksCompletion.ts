@@ -1,4 +1,5 @@
 import { AnyNode } from "nunjucks/src/nodes.js";
+import { logger } from "../logger"
 import {
   CompletionItem,
   CompletionItemKind,
@@ -23,22 +24,23 @@ export class NunjucksCompletionProvider extends NunjucksProvider {
     const completions: CompletionItem[] = []
 
     const {
-      previousContent,
-    } = getContext(document, position.line, position.character);
-
-    const {
       currentLineContent,
     } = getContext(document, position.line, position.character);
 
-    const word = this.getWordAtCursor(currentLineContent, position.character, position.line);
+    // - 1 is an assumption since we're on a completion.
+    const word = this.getWordAtCursor(currentLineContent, position.character - 2, position.line);
 
+    logger.write({word})
     if (!word) { return completions }
 
-    // do we need to parse??
+    if (word?.word.endsWith(".")) {
+    }
+
     const result = this.parser.parseDocument(document);
     let currentNode = this.parser.findNodeAtPosition(result.ast, position.line, position.character)
 
-    completions.concat(this.getCompletionForNode(currentNode, data));
+    logger.write({currentNode})
+    // completions.concat(this.getCompletionForNode(currentNode, data));
     // return Object.values(definitions.generalCompletions);
     // switch (context.type) {
     //   default:
@@ -50,7 +52,13 @@ export class NunjucksCompletionProvider extends NunjucksProvider {
 
 
   getCompletionForNode(node: AnyNode | null, data?: DataOrError | null): CompletionItem[] {
-    const completions: CompletionItem[] = []
+    const completions: CompletionItem[] = [
+    ]
+
+    completions.push({
+      label: "key",
+      kind: CompletionItemKind.Text,
+    })
 
     if (!node) { return completions }
 
@@ -61,13 +69,16 @@ export class NunjucksCompletionProvider extends NunjucksProvider {
     }
 
     if (value) {
-      completions.concat(
-        Object.keys(value).map((key) => {
-          return {
-            label: key
-          }
-        })
-      )
+      const keys = Object.keys(value).map((key) => {
+        return {
+          label: key
+        }
+      })
+
+      completions.concat([{
+        label: "key",
+        kind: CompletionItemKind.Text,
+      }])
     }
 
     return completions
