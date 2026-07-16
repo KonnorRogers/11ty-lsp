@@ -14,6 +14,11 @@ import * as definitions from './definitions'
 import { DataOrError } from '../constants';
 import { NunjucksProvider } from './nunjucksProvider';
 
+/**
+ * Insertion value to prevent AST parsing errors.
+ */
+const SENTINEL = "__completion__"
+
 export class NunjucksCompletionProvider extends NunjucksProvider {
   provideCompletions(
     document: TextDocument,
@@ -25,21 +30,23 @@ export class NunjucksCompletionProvider extends NunjucksProvider {
 
     const {
       currentLineContent,
+      contentBeforeOffset,
+      contentAfterOffset
     } = getContext(document, position.line, position.character);
 
     // - 1 is an assumption since we're on a completion.
-    const word = this.getWordAtCursor(currentLineContent, position.character - 2, position.line);
+    const word = this.getWordAtCursor(currentLineContent, position.character, position.line);
 
-    logger.write({word})
     if (!word) { return completions }
 
-    if (word?.word.endsWith(".")) {
-    }
+    const patched = /\.\s*$/.test(contentBeforeOffset)
+      ? contentBeforeOffset + SENTINEL + contentAfterOffset
+      : contentBeforeOffset + contentAfterOffset
 
-    const result = this.parser.parseDocument(document);
+    const result = this.parser.parseContent(patched);
     let currentNode = this.parser.findNodeAtPosition(result.ast, position.line, position.character)
 
-    logger.write({currentNode})
+    logger.write({ currentNode })
     // completions.concat(this.getCompletionForNode(currentNode, data));
     // return Object.values(definitions.generalCompletions);
     // switch (context.type) {
@@ -52,13 +59,8 @@ export class NunjucksCompletionProvider extends NunjucksProvider {
 
 
   getCompletionForNode(node: AnyNode | null, data?: DataOrError | null): CompletionItem[] {
-    const completions: CompletionItem[] = [
+    let completions: CompletionItem[] = [
     ]
-
-    completions.push({
-      label: "key",
-      kind: CompletionItemKind.Text,
-    })
 
     if (!node) { return completions }
 
@@ -71,14 +73,12 @@ export class NunjucksCompletionProvider extends NunjucksProvider {
     if (value) {
       const keys = Object.keys(value).map((key) => {
         return {
-          label: key
+          label: key,
+          kind: CompletionItemKind.Text,
         }
       })
 
-      completions.concat([{
-        label: "key",
-        kind: CompletionItemKind.Text,
-      }])
+      completions = completions.concat(keys)
     }
 
     return completions
