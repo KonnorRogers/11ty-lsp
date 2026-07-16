@@ -49,7 +49,7 @@ const packageData = JSON.parse(fs.readFileSync(path.resolve(__dirname, "..", "..
 const packageName = packageData.name
 const packageVersion = packageData.version
 
-logger.write({ packageName, packageVersion })
+// logger.write({ packageName, packageVersion })
 /**
  * per-file data, this compares input keys from 11ty
  */
