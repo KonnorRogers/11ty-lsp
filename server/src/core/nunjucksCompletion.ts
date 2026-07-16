@@ -1,3 +1,4 @@
+import { AnyNode } from "nunjucks/src/nodes.js";
 import {
   CompletionItem,
   CompletionItemKind,
@@ -6,44 +7,73 @@ import {
   MarkupKind
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { NunjucksParser } from './nunjucksParser';
 import { NunjucksSettings } from '../settings/nunjucksSettings';
 import { getContext } from './getContext';
 import * as definitions from './definitions'
 import { DataOrError } from '../constants';
+import { NunjucksProvider } from './nunjucksProvider';
 
-export class NunjucksCompletionProvider {
-  constructor(private parser: NunjucksParser) {}
-
+export class NunjucksCompletionProvider extends NunjucksProvider {
   provideCompletions(
     document: TextDocument,
     position: Position,
     settings: NunjucksSettings,
     data?: DataOrError | null
   ): CompletionItem[] {
+    const completions: CompletionItem[] = []
+
     const {
       previousContent,
-      contentBeforeOffset,
     } = getContext(document, position.line, position.character);
 
-    // const result = this.parser.parseContent(previousContent + "\n" + contentBeforeOffset)
+    const {
+      currentLineContent,
+    } = getContext(document, position.line, position.character);
 
-    // if (result.error) {
-    //   return this.getGeneralCompletions();
-    // }
+    const word = this.getWordAtCursor(currentLineContent, position.character, position.line);
 
-    // result.ast.isPrototypeOf
+    if (!word) { return completions }
 
-    return Object.values(definitions.generalCompletions);
+    // do we need to parse??
+    const result = this.parser.parseDocument(document);
+    let currentNode = this.parser.findNodeAtPosition(result.ast, position.line, position.character)
+
+    completions.concat(this.getCompletionForNode(currentNode, data));
+    // return Object.values(definitions.generalCompletions);
     // switch (context.type) {
     //   default:
     //     return this.getGeneralCompletions(document);
     // }
+
+    return completions
   }
 
 
-  getCompletionContext (content: string) {
+  getCompletionForNode(node: AnyNode | null, data?: DataOrError | null): CompletionItem[] {
+    const completions: CompletionItem[] = []
+
+    if (!node) { return completions }
+
+    let value = null
+    if (node.typename === "Symbol") {
+      // @ts-expect-error
+      value = data[node.value]
+    }
+
+    if (value) {
+      completions.concat(
+        Object.keys(value).map((key) => {
+          return {
+            label: key
+          }
+        })
+      )
+    }
+
+    return completions
   }
+
+
 
   resolveCompletion(item: CompletionItem): CompletionItem {
     return item;
