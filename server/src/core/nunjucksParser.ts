@@ -129,30 +129,30 @@ export class NunjucksParser {
     return parser.safeParseAsRoot()
   }
 
-  findNodeInRange(node: nodes.AnyNode, range: Range): nodes.AnyNode | null {
-    let foundNode: nodes.AnyNode | null = null
+  findNodeAtPosition(root: nodes.AnyNode, line: number, character: number): nodes.AnyNode | null {
+    let best: nodes.AnyNode | null = null;
 
-    // Search children first. "depth-first"
-    if ("children" in node) {
-      for (const child of node.children) {
-        foundNode = this.findNodeInRange(child, range)
-        if (foundNode) {
-          return foundNode
+    const visit = (node: any) => {
+      if (typeof node?.lineno === "number" && typeof node?.colno === "number") {
+        if (node.lineno === line && node.colno <= character) {
+          // nearest token starting at or before the cursor wins
+          if (!best || node.colno > best.colno) best = node;
         }
       }
-    }
-
-    // cols and lines in nunjucks are 1-indexed -_-
-    const offset = 1
-    if (!foundNode) {
-      if (node.lineno >= range.start.line - offset && node.lineno <= range.end.line - offset) {
-        if (node.colno >= range.start.character - offset && node.colno <= range.end.character - offset) {
-          foundNode = node
-          return foundNode
+      if (node?.children) {
+        for (const c of node.children) {
+          visit(c);
         }
       }
-    }
+      // nunjucks tucks sub-nodes here too, not just in children:
+      for (const k of ["target", "val", "args", "name"]) {
+        if (node?.[k] && typeof node[k] === "object") {
+          visit(node[k]);
+        }
+      }
+    };
 
-    return foundNode
+    visit(root);
+    return best;
   }
 }
