@@ -3,7 +3,7 @@ import { Hover, MarkupKind, Position, Range } from "vscode-css-languageservice";
 import { NunjucksSettings } from "../settings/nunjucksSettings";
 import { getContext } from "./getContext";
 import * as definitions from "./definitions"
-import { AnyNode, LookupVal } from "nunjucks/src/nodes.js";
+import { AnyNode, Literal, LookupVal, Symbol as SymbolNode } from "nunjucks/src/nodes.js";
 import { logger } from "../logger";
 import { NunjucksProvider } from "./nunjucksProvider";
 
@@ -82,6 +82,7 @@ export class NunjucksHoverProvider extends NunjucksProvider {
       // @ts-expect-error
       let value = data[node.value]
 
+      contents.range = this.nodeToRange(node)
       contents.contents.value = `Value: ` + this.valueToText(value)
       return contents
     }
@@ -91,7 +92,14 @@ export class NunjucksHoverProvider extends NunjucksProvider {
       const keys = this.getKeysForLookupValNode(node)
       const val = this.dig(data, ...keys)
 
+      contents.range = this.nodeToRange(node)
       contents.contents.value = `Value: ${this.valueToText(val)}\n`
+    }
+
+    if (node.typename === "Literal") {
+      contents.range = this.nodeToRange(node)
+      // Walk back to find closest LookupVal node.
+
     }
 
     // if (node.typename === "Global" && definitions.globalFunctions[str]) {
@@ -100,6 +108,29 @@ export class NunjucksHoverProvider extends NunjucksProvider {
     // }
 
     return contents
+  }
+
+  nodeToRange (node: LookupVal | SymbolNode | Literal): Range {
+    let value = ""
+    if (node.typename === "Symbol" || node.typename === "Literal") {
+      value = node.value
+    }
+
+    if (node.typename === "LookupVal") {
+      value = node.val.value
+    }
+
+    return {
+      start: {
+        line: node.lineno,
+        character: node.colno,
+      },
+      end: {
+        line: node.lineno,
+        character: node.colno + value.length
+      }
+
+    }
   }
 
   // private wordToHoverDocumentation(word: ReturnType<typeof this.getWordAtCursor>): Hover | null {

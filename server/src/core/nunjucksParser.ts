@@ -118,6 +118,7 @@ export class NunjucksParser {
   constructor (public settings: NunjucksParserSettings) {
     this.settings = settings
   }
+
   parseDocument(document: TextDocument): ReturnType<typeof this.parseContent> {
      const content = document.getText();
 
@@ -129,30 +130,50 @@ export class NunjucksParser {
     return parser.safeParseAsRoot()
   }
 
-  findNodeAtPosition(root: nodes.AnyNode, line: number, character: number): nodes.AnyNode | null {
+  findClosestNodeOfType (ast: nodes.Root, node: nodes.AnyNode) {
+    const visit = () => {
+    }
+    while (true) {
+
+    }
+
+  }
+
+  walk(
+    node: any,
+    visit: (node: nodes.AnyNode, parent: nodes.AnyNode | null) => boolean | void,
+    parent: nodes.AnyNode | null = null
+  ): void {
+    if (node == null || typeof node !== "object") return
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        this.walk(item, visit, parent)
+      }
+      return
+    }
+    if (node instanceof nodes.Node) {
+      const retVal = visit(node, parent)
+      if (retVal) { return }
+    }
+
+    for (const field of (node.fields ?? [])) {
+      this.walk(node[field], visit, node)
+    }
+  }
+
+  findNodeAtPosition(root: nodes.Root, line: number, character: number): nodes.AnyNode | null {
     let best: nodes.AnyNode | null = null;
 
-    const visit = (node: any) => {
+    this.walk(root, (node) => {
       if (typeof node?.lineno === "number" && typeof node?.colno === "number") {
         if (node.lineno === line && node.colno <= character) {
           // nearest token starting at or before the cursor wins
-          if (!best || node.colno > best.colno) best = node;
+          if (!best || node.colno > best.colno) {
+            best = node;
+          }
         }
       }
-      if (node?.children) {
-        for (const c of node.children) {
-          visit(c);
-        }
-      }
-      // nunjucks tucks sub-nodes here too, not just in children:
-      for (const k of ["target", "val", "args", "name"]) {
-        if (node?.[k] && typeof node[k] === "object") {
-          visit(node[k]);
-        }
-      }
-    };
-
-    visit(root);
+    });
     return best;
   }
 }
