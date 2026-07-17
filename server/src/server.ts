@@ -405,7 +405,7 @@ async function getTextDocumentDiagnostics (textDocument: TextDocumentIdentifier)
     if (data instanceof Error) {
       // @ts-expect-error 11ty bakes it on "originalError"
       const err = data.originalError;
-      const hasPos = ("lineno" in err && "colno" in err);
+      const hasPos = typeof err === "object" && ("lineno" in err && "colno" in err);
 
       // TODO: Unsure if its better to highlight whole file, or just the first char + line. Whole file makes it obvious your 11ty build is broken.
       let range = {
