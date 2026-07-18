@@ -376,6 +376,35 @@ export class NunjucksRootVirtualCode implements VirtualCode {
   }
 }
 
+/** Matches `.njk`, `.nunjucks`, `.jinja`, `.html`, and compound forms like `foo.jinja.html`. */
+const NUNJUCKS_FILE_RE = /\.(njk|nunjucks|jinja|html|md)(\.|$)/
+
+/**
+ * LanguageIds editors report for these files beyond VS Code's own
+ * "nunjucks" (from this project's `contributes.languages`) — e.g. Neovim
+ * sends its buffer's `filetype` option *verbatim* as the LSP languageId,
+ * and users commonly set a compound filetype like `jinja.html` (stacking
+ * "jinja" and "html" ftplugins/treesitter parsers) for better highlighting.
+ */
+const NUNJUCKS_LANGUAGE_IDS = new Set([
+  "nunjucks", "jinja", "jinja-html", "jinja.html", "django-html", "html+jinja",
+])
+
+/**
+ * For an *opened* document, Volar calls `createVirtualCode` with whatever
+ * languageId the client reported in `textDocument/didOpen` — verbatim, not
+ * re-derived through `getLanguageId` below (that hook only covers files
+ * resolved indirectly, e.g. via imports, that were never explicitly
+ * opened). So matching only `languageId === "nunjucks"` here would silently
+ * do nothing for a buffer Neovim opened as `jinja.html`, `jinja`, etc.,
+ * even though the file itself is exactly the kind of file we handle —
+ * checking the URI's own extension makes that independent of whatever
+ * string a given editor/user setup happens to report.
+ */
+function isNunjucksDocument(uri: URI, languageId: string): boolean {
+  return NUNJUCKS_FILE_RE.test(uri.path) || NUNJUCKS_LANGUAGE_IDS.has(languageId)
+}
+
 /**
  * `getData`/`getExtensions` are looked up per-document (keyed by the same
  * 11ty config resolution `server.ts` already does via `getDataForFile`), so
@@ -389,7 +418,7 @@ export function createNunjucksLanguagePlugin(
 ): LanguagePlugin<URI, NunjucksRootVirtualCode> {
   return {
     getLanguageId(uri) {
-      if (/\.(njk|nunjucks|jinja|html)(\.|$)/.test(uri.path)) {
+      if (NUNJUCKS_FILE_RE.test(uri.path)) {
         return "nunjucks"
       }
       return undefined
@@ -411,7 +440,7 @@ export function createNunjucksLanguagePlugin(
       },
     },
     createVirtualCode(uri, languageId, snapshot) {
-      if (languageId !== "nunjucks") return undefined
+      if (!isNunjucksDocument(uri, languageId)) return undefined
       const code = new NunjucksRootVirtualCode()
       const text = snapshot.getText(0, snapshot.getLength())
       code.update(text, getData(uri), getExtensions(uri))
