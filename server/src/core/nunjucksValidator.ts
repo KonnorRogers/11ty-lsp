@@ -1,20 +1,20 @@
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { NunjucksSettings } from "../settings/nunjucksSettings";
 import { Diagnostic } from "vscode-languageserver";
-import { NunjucksParser } from "./nunjucksParser";
+import { NunjucksExtension, NunjucksParser } from "./nunjucksParser";
 import { NEW_LINE } from "../constants";
 
 export class NunjucksValidator {
   constructor(public parser: NunjucksParser) {}
 
-  validate(document: TextDocument, settings: Partial<NunjucksSettings>): Diagnostic[] {
+  validate(document: TextDocument, settings: Partial<NunjucksSettings>, extensions?: NunjucksExtension[]): Diagnostic[] {
     const content = document.getText();
-    return this.validateContent(content, settings)
+    return this.validateContent(content, settings, extensions)
   }
 
-  validateContent (content: string, settings: Partial<NunjucksSettings>): Diagnostic[] {
+  validateContent (content: string, settings: Partial<NunjucksSettings>, extensions?: NunjucksExtension[]): Diagnostic[] {
     const diagnostics: Diagnostic[] = [];
-    const result = this.parser.parseContent(content)
+    const result = this.parser.parseContent(content, extensions)
 
     const docLines = content.split(NEW_LINE)
     const finalLine = docLines.length - 1

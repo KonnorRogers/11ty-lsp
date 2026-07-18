@@ -2,7 +2,6 @@ import {test} from "node:test"
 import assert from 'node:assert';
 
 import { NunjucksParser } from "./nunjucksParser"
-import { NunjucksHoverProvider } from "./nunjucksHover";
 import { NunjucksValidator } from "./nunjucksValidator";
 
 test("Should properly validate the AST", () => {

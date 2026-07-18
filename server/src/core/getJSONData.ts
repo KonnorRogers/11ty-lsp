@@ -3,6 +3,7 @@ import * as fs from "node:fs"
 import { getEleventyRuntime } from "./eleventy-runtime"
 import { DataError, DataOrError } from "../constants"
 import { logger } from "../logger"
+import type { NunjucksExtension } from "./nunjucksParser"
 
 function decycle(value: any, ancestors = new WeakSet()): any {
   if (value === null || typeof value !== "object") return value
@@ -20,6 +21,27 @@ const RESOURCE_MODIFIED_EVENTS = [
   "buildawesome.resourcemodified", // 11ty 4.x (canary)
   "eleventy.resourceModified",     // 11ty 3.x
 ];
+
+// 11ty emits its *actual* configured nunjucks Environment (with every
+// custom tag/shortcode/filter registered via eleventyConfig already
+// applied) under one of these event names, depending on version — same
+// dual-name pattern as RESOURCE_MODIFIED_EVENTS above.
+const NUNJUCKS_ENGINE_READY_EVENTS = [
+  "buildawesome.engine.njk", // 11ty 4.x (canary) / @awesome.me/buildawesome
+  "eleventy.engine.njk",     // 11ty 3.x
+];
+
+const extensionsByConfigPath = new Map<string, NunjucksExtension[]>()
+
+/**
+ * The custom nunjucks tags/shortcodes registered for a given 11ty config,
+ * captured the last time `getJSONData` ran a build for it — see
+ * `NUNJUCKS_ENGINE_READY_EVENTS` above. `undefined` if a build for this
+ * config hasn't completed yet (or never touched a nunjucks template).
+ */
+export function getNunjucksExtensionsForConfig(configPath: string): NunjucksExtension[] | undefined {
+  return extensionsByConfigPath.get(configPath)
+}
 
 export async function getJSONData({ configPath, output, invalidate = [] }:
   { configPath: string; output: string; invalidate?: string[] }): Promise<DataOrError> {
@@ -41,7 +63,16 @@ export async function getJSONData({ configPath, output, invalidate = [] }:
   const options = {
     source: "cli",
     // This is the crux of everything and gives us the data for every input file.
-    config: async (c: any) => { c.dataFilterSelectors.add("*"); },
+    config: async (c: any) => {
+      c.dataFilterSelectors.add("*");
+
+      const captureNunjucksEnvironment = ({ environment }: { environment: { extensionsList?: NunjucksExtension[] } }) => {
+        extensionsByConfigPath.set(configPath, environment.extensionsList ?? [])
+      }
+      for (const ev of NUNJUCKS_ENGINE_READY_EVENTS) {
+        c.on(ev, captureNunjucksEnvironment)
+      }
+    },
     configPath
   }
 

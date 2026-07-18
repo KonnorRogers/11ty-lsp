@@ -11,6 +11,11 @@
     "incremental": true,
     "declaration": true,
     "composite": true,
+    // @volar/language-server's index.d.ts re-exports overlapping names from
+    // both `./protocol` and `vscode-languageserver`, which TS flags as an
+    // ambiguous `export *` collision purely within that package's own type
+    // declarations — unrelated to anything in this project's source.
+    "skipLibCheck": true,
   },
   "include": ["src"],
   "exclude": ["node_modules", ".vscode-test"],

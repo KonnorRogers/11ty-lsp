@@ -1,4 +1,3 @@
-import { logger, serializeError } from "./logger";
 import { ELEVENTY_OR_BUILDAWESOME_PACKAGES } from "./constants";
 
 import * as path from "node:path"
@@ -6,38 +5,27 @@ import * as os from "node:os"
 import * as fs from "node:fs"
 import * as crypto from "node:crypto"
 import { fileURLToPath } from "node:url";
+
 import {
   createConnection,
-  TextDocuments,
-  ProposedFeatures,
-  InitializeParams,
-  TextDocumentSyncKind,
-  InitializeResult,
-  CompletionItem,
-  // CompletionItemKind,
-  DocumentDiagnosticReportKind,
-  DocumentDiagnosticReport,
+  createServer,
+  createTypeScriptProject,
+} from "@volar/language-server/node";
+import * as ts from "typescript";
+import { create as createHtmlServicePlugin } from "volar-service-html";
+import { create as createCssServicePlugin } from "volar-service-css";
+import { create as createTsServicePlugins } from "volar-service-typescript";
+
+import {
   DidChangeConfigurationNotification,
-  TextDocumentPositionParams,
-  TextDocumentIdentifier,
   DidChangeWatchedFilesNotification,
   ExecuteCommandParams,
 } from "vscode-languageserver/node";
 
-import { TextDocument } from "vscode-languageserver-textdocument";
-import {
-  Hover,
-  LanguageModes,
-  getLanguageModes
-} from "./languageModes";
-
 import { NunjucksSettings } from "./settings/nunjucksSettings";
-import { NunjucksParser } from "./core/nunjucksParser";
-import { NunjucksCompletionProvider } from "./core/nunjucksCompletion";
-import { NunjucksValidator } from "./core/nunjucksValidator";
-import { NunjucksHoverProvider } from "./core/nunjucksHover";
-import { getJSONData } from "./core/getJSONData";
-import { DiagnosticSeverity } from "vscode-css-languageservice";
+import { createNunjucksLanguagePlugin } from "./core/nunjucksVirtualCode";
+import { createNunjucksServicePlugin } from "./core/nunjucksServicePlugin";
+import { getJSONData, getNunjucksExtensionsForConfig } from "./core/getJSONData";
 import { DataOrError } from "./constants";
 
 const dataByConfig = new Map<string, DataOrError>();
@@ -49,13 +37,19 @@ const packageData = JSON.parse(fs.readFileSync(path.resolve(__dirname, "..", "..
 const packageName = packageData.name
 const packageVersion = packageData.version
 
-// logger.write({ packageName, packageVersion })
 /**
  * per-file data, this compares input keys from 11ty
  */
 function getDataForFile(documentUri: string): DataOrError | undefined | null {
   const data = getData(documentUri)
-  const filePath = fileURLToPath(documentUri);
+
+  let filePath: string;
+  try {
+    filePath = fileURLToPath(documentUri);
+  } catch {
+    return null; // not a `file:` URI (e.g. a Volar embedded-content URI)
+  }
+
   const rootDir = findRootDir(filePath)
 
   let relativePath = ""
@@ -85,6 +79,17 @@ function getData(documentUri: string): DataOrError | undefined {
   return undefined;
 }
 
+/**
+ * The project's real registered nunjucks tags/shortcodes (from the same
+ * 11ty build that produced `dataByConfig`), so our own parser recognizes
+ * custom tags like `eleventyConfig.addNunjucksTag`/`addShortcode` instead
+ * of throwing "unknown block tag" on them.
+ */
+function getExtensionsForFile(documentUri: string) {
+  const config = findConfigForDocument(documentUri);
+  return config ? getNunjucksExtensionsForConfig(config) : undefined;
+}
+
 function tmpDirFor(configPath: string) {
   const hash = crypto.createHash("sha1").update(configPath).digest("hex").slice(0, 12);
   return path.join(os.tmpdir(), "11ty-lsp-" + hash);
@@ -101,32 +106,33 @@ async function rebuildConfig(configPath: string, invalidate: string[] = []) {
 
   dataByConfig.set(configPath, data);
 
-  // The freshly-rebuilt data is now in the cache. Ask the client to re-pull
-  // diagnostics so the pull provider recomputes against it. We must NOT use the
-  // push model (connection.sendDiagnostics) here: since we advertise
-  // `diagnosticProvider`, the client manages diagnostics via the pull model, and
-  // pushed diagnostics live in a separate collection that can't clear a
-  // pull-provided result (that's why stale errors lingered until reopen).
-  connection.languages.diagnostics.refresh();
+  // The freshly-rebuilt data is now in the cache, but virtual code/type
+  // synthesis (see nunjucksVirtualCode.ts) is only regenerated when Volar
+  // thinks a *document's own text* changed — a pure 11ty data change
+  // doesn't trip that. Reloading the project forces every virtual code to
+  // be regenerated against the fresh data, and requesting a refresh makes
+  // pull-model diagnostics recompute too.
+  server.project.reload();
+  await server.languageFeatures.requestRefresh(false);
 }
 
-function scheduleRebuild(document: TextDocument, delay = 300) {
-  clearTimeout(rebuildTimers.get(document.uri));
-  rebuildTimers.set(document.uri, setTimeout(() => {
-    rebuildTimers.delete(document.uri);
-    rebuildAndReport(document);
+function scheduleRebuild(documentUri: string, delay = 300) {
+  clearTimeout(rebuildTimers.get(documentUri));
+  rebuildTimers.set(documentUri, setTimeout(() => {
+    rebuildTimers.delete(documentUri);
+    rebuildAndReport(documentUri);
   }, delay));
 }
 
-async function rebuildAndReport(document: TextDocument) {
-  const found = findConfigForDocument(document.uri);
+async function rebuildAndReport(documentUri: string) {
+  const found = findConfigForDocument(documentUri);
   if (found) {
     // rebuildConfig refreshes diagnostics once the cache is updated.
-    await rebuildConfig(found, [fileURLToPath(document.uri)]);
+    await rebuildConfig(found, [fileURLToPath(documentUri)]);
   } else {
     // No 11ty config: nothing to rebuild, but the document's own validation may
     // have changed, so still ask the client to re-pull.
-    connection.languages.diagnostics.refresh();
+    await server.languageFeatures.requestRefresh(false);
   }
 }
 
@@ -190,19 +196,15 @@ function findConfigForDocument(documentUri: string): string | null {
   return findRootConfigFile(path.dirname(filePath));
 }
 
-// Create a connection for the server, using Node's IPC as a transport.
-// Also include all preview / proposed LSP features.
-const connection = createConnection(ProposedFeatures.all);
-
-// Create a simple text document manager.
-const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
-
-let languageModes: LanguageModes;
+// Create a connection for the server, using Node's IPC as a transport, and
+// wrap it in a Volar server: `server.initialize()` below handles routing
+// hover/completion/diagnostics across all the registered language service
+// plugins (and across root/embedded virtual documents) for us.
+const connection = createConnection();
+const server = createServer(connection);
 
 let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
-let hasDiagnosticRelatedInformationCapability = false;
-
 
 // Default settings
 const defaultSettings: NunjucksSettings = {
@@ -216,40 +218,23 @@ const defaultSettings: NunjucksSettings = {
 
 let globalSettings: NunjucksSettings = defaultSettings;
 
-// Initialize analyzers
-let parser = new NunjucksParser(defaultSettings);
-let nunjucksCompletionProvider = new NunjucksCompletionProvider(parser);
-let nunjucksValidator = new NunjucksValidator(parser);
-let nunjucksHoverProvider = new NunjucksHoverProvider(parser)
+async function getDocumentSettings(resource: string): Promise<NunjucksSettings> {
+  if (!hasConfigurationCapability) {
+    return globalSettings;
+  }
+  const settings = await server.configurations.get<NunjucksSettings>('11ty-lsp', resource);
+  return settings ?? defaultSettings;
+}
 
-// Cache the settings of all open documents
-const documentSettings: Map<string, Thenable<NunjucksSettings>> = new Map();
-
-async function restartServer () {
+async function restartServer() {
   try {
     connection.console.log(`Restarting ${name} server...`);
 
-    // Clear document settings cache
-    documentSettings.clear();
-
-    // Reinitialize language modes
-    if (languageModes) {
-      languageModes.dispose();
-    }
-    languageModes = getLanguageModes();
-
-    // Reinitialize analyzers with current settings
-    parser = new NunjucksParser(globalSettings);
-    nunjucksCompletionProvider = new NunjucksCompletionProvider(parser);
-    nunjucksValidator = new NunjucksValidator(parser);
-    nunjucksHoverProvider = new NunjucksHoverProvider(parser);
-
-    // Revalidate all open documents by asking the client to re-pull.
-    connection.languages.diagnostics.refresh();
+    dataByConfig.clear();
+    server.project.reload();
+    await server.languageFeatures.requestRefresh(true);
 
     connection.console.log(`${name} server restarted successfully`);
-
-    // Show info message to user
     connection.window.showInformationMessage(`${name} server has been restarted`);
   } catch (error) {
     connection.console.error(`Error during server restart: ${error}`);
@@ -257,65 +242,57 @@ async function restartServer () {
   }
 }
 
-connection.onInitialize((params: InitializeParams) => {
-  languageModes = getLanguageModes();
+connection.onInitialize((params) => {
+  const result = server.initialize(
+    params,
+    createTypeScriptProject(ts, undefined, () => ({
+      languagePlugins: [
+        createNunjucksLanguagePlugin(
+          (uri) => getDataForFile(uri.toString()),
+          (uri) => getExtensionsForFile(uri.toString()),
+        ),
+      ],
+    })),
+    [
+      ...createTsServicePlugins(ts),
+      createHtmlServicePlugin(),
+      createCssServicePlugin(),
+      createNunjucksServicePlugin({
+        getSettings: (uri) => getDocumentSettings(uri),
+        getData: (uri) => getDataForFile(uri),
+        getExtensions: (uri) => getExtensionsForFile(uri),
+      }),
+    ],
+  );
 
-  documents.onDidClose(e => {
-    languageModes.onDocumentRemoved(e.document);
-    documentSettings.delete(e.document.uri);
-  });
-  connection.onShutdown(() => {
-    languageModes.dispose();
-  });
+  result.capabilities.executeCommandProvider = {
+    commands: [RESTART_COMMAND],
+  };
+
   const capabilities = params.capabilities;
-
   hasConfigurationCapability = !!(
     capabilities.workspace && !!capabilities.workspace.configuration
   );
   hasWorkspaceFolderCapability = !!(
     capabilities.workspace && !!capabilities.workspace.workspaceFolders
   );
-  hasDiagnosticRelatedInformationCapability = !!(
-    capabilities.textDocument &&
-    capabilities.textDocument.publishDiagnostics &&
-    capabilities.textDocument.publishDiagnostics.relatedInformation
-  );
 
-  const result: InitializeResult = {
-    capabilities: {
-      textDocumentSync: TextDocumentSyncKind.Incremental,
-      completionProvider: {
-        resolveProvider: true,
-        triggerCharacters: [
-          '.', '|', '{%', '(', '{{'
-        ]
-      },
-      hoverProvider: true,
-      diagnosticProvider: {
-        interFileDependencies: true,
-        workspaceDiagnostics: false
-      },
-      // Add execute command provider for restart functionality
-      executeCommandProvider: {
-        commands: [RESTART_COMMAND]
-      }
-    },
-    serverInfo: {
-      name: packageName,
-      version: packageVersion
-    }
+  result.serverInfo = {
+    name: packageName,
+    version: packageVersion,
   };
 
   return result;
 });
 
 connection.onInitialized(() => {
+  server.initialized();
+
   const startupMessage = `11ty-lsp server started (pid ${process.pid}) at ${new Date().toISOString()}`;
   connection.console.log(startupMessage);
   connection.window.showInformationMessage(startupMessage);
 
   if (hasConfigurationCapability) {
-    // Register for all configuration changes
     connection.client.register(DidChangeConfigurationNotification.type, undefined);
   }
   if (hasWorkspaceFolderCapability) {
@@ -326,23 +303,17 @@ connection.onInitialized(() => {
   connection.client.register(DidChangeWatchedFilesNotification.type, {
     watchers: [
       { globPattern: `**/**/*.*` },
-      // { globPattern: `**/**/*.njk` },
     ],
   })
 });
 
 connection.onDidChangeConfiguration(async (change) => {
-  if (hasConfigurationCapability) {
-    // Reset all cached document settings
-    documentSettings.clear();
-  } else {
+  if (!hasConfigurationCapability) {
     globalSettings = <NunjucksSettings>(
       (change.settings["11ty-lsp"] || defaultSettings)
     );
   }
 
-  // Revalidate all open text documents
-  // documents.all().forEach(sendDiagnostics);
   await restartServer()
 });
 
@@ -352,14 +323,12 @@ connection.onExecuteCommand(async (params: ExecuteCommandParams) => {
   }
 })
 
-// The content of a text document has changed
-documents.onDidChangeContent(change => {
-  scheduleRebuild(change.document);
-});
-
-documents.onDidSave(change => {
-  scheduleRebuild(change.document);
-});
+// 11ty data is rebuilt whenever a template is opened, edited, or saved —
+// this is unrelated to (and runs alongside) Volar's own document/virtual
+// code tracking.
+server.documents.onDidOpen(change => scheduleRebuild(change.document.uri));
+server.documents.onDidChangeContent(change => scheduleRebuild(change.document.uri));
+server.documents.onDidSave(change => scheduleRebuild(change.document.uri));
 
 // Watch for file changes that might require restart
 connection.onDidChangeWatchedFiles(async (params) => {
@@ -381,149 +350,4 @@ connection.onDidChangeWatchedFiles(async (params) => {
   }
 });
 
-async function getTextDocumentDiagnostics (textDocument: TextDocumentIdentifier) {
-  const document = documents.get(textDocument.uri);
-  if (document !== undefined) {
-    const settings = await getDocumentSettings(document.uri);
-
-    if (!settings.enabledFeatures.diagnostics) {
-      return {
-        kind: DocumentDiagnosticReportKind.Full,
-        items: []
-      } satisfies DocumentDiagnosticReport;
-    }
-
-    const diagnostics = nunjucksValidator.validate(document, settings);
-
-    let data = getDataForFile(document.uri)
-
-    if (data == null) {
-      // no data found, check fallback to `getData()` and see if we have an error.
-      data = getData(document.uri)
-    }
-
-    if (data instanceof Error) {
-      // @ts-expect-error 11ty bakes it on "originalError"
-      const err = data.originalError;
-      const hasPos = typeof err === "object" && ("lineno" in err && "colno" in err);
-
-      // TODO: Unsure if its better to highlight whole file, or just the first char + line. Whole file makes it obvious your 11ty build is broken.
-      let range = {
-        start: { line: 0, character: 0 },
-        end: document.positionAt(document.getText().length),
-      }
-
-      if (hasPos) {
-        // 11ty reports kind of useless numbers. So we ignore it.
-        // const colno = (Number(err.colno) ?? 0)
-        // const lineno = (Number(err.lineno) ?? 0)
-        // range = {
-        //   start: { line: lineno, character: colno },
-        //   end:   { line: lineno, character: colno + 1 },
-        // }
-      }
-      diagnostics.unshift({
-        range,
-        message: `Error compiling 11ty: ` + JSON.stringify(serializeError(data), null, 2),
-        source: "[11ty-lsp]: 11ty CLI",
-        severity: DiagnosticSeverity.Error,
-      });
-    }
-
-    return {
-      kind: DocumentDiagnosticReportKind.Full,
-      items: diagnostics
-    } satisfies DocumentDiagnosticReport;
-  } else {
-    return {
-      kind: DocumentDiagnosticReportKind.Full,
-      items: []
-    } satisfies DocumentDiagnosticReport;
-  }
-}
-
-
-
-// Hover provider
-connection.onHover(async (params): Promise<Hover | null> => {
-  try {
-    const document = documents.get(params.textDocument.uri);
-    if (!document) {
-      return null;
-    }
-
-    const settings = await getDocumentSettings(document.uri);
-
-    if (!settings.enabledFeatures?.hover) {
-      return null;
-    }
-
-
-    let hoverData = getDataForFile(document.uri)
-
-    if (hoverData instanceof Error) {
-      hoverData = {}
-    }
-
-    return nunjucksHoverProvider.provideHover(document, params.position, settings, hoverData);
-  } catch (error) {
-    connection.console.error(`Error in hover provider: ${error}`);
-    return null;
-  }
-
-})
-
-
-function getDocumentSettings(resource: string): Thenable<NunjucksSettings> {
-  if (!hasConfigurationCapability) {
-    return Promise.resolve(globalSettings);
-  }
-  let result = documentSettings.get(resource);
-  if (!result) {
-    result = connection.workspace.getConfiguration({
-      scopeUri: resource,
-      section: '11ty-lsp'
-    });
-    documentSettings.set(resource, result);
-  }
-  return result;
-}
-
-// Completion provider
-connection.onCompletion(async (textDocumentPosition: TextDocumentPositionParams): Promise<CompletionItem[]> => {
-  const document = documents.get(textDocumentPosition.textDocument.uri);
-  if (!document) {
-    return [];
-  }
-
-  const settings = await getDocumentSettings(document.uri);
-
-  if (!settings.enabledFeatures.completion) {
-    return [];
-  }
-
-  const data = getDataForFile(document.uri)
-  return nunjucksCompletionProvider.provideCompletions(document, textDocumentPosition.position, settings, data);
-});
-
-// Completion resolve provider
-// This handler resolves additional information for the item selected in
-// the completion list.
-// Required by VSCode.
-// Completion resolve provider
-connection.onCompletionResolve((item: CompletionItem): CompletionItem => {
-  return nunjucksCompletionProvider.resolveCompletion(item);
-});
-
-// Diagnostic provider
-connection.languages.diagnostics.on(async (params) => {
-  const diagnostics = await getTextDocumentDiagnostics(params.textDocument)
-  return diagnostics
-});
-
-// Make the text document manager listen on the connection
-// for open, change and close text document events
-documents.listen(connection);
-
-// Listen on the connection
 connection.listen();

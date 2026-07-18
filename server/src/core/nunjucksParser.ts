@@ -11,6 +11,16 @@ import * as fs from "node:fs"
 //   }
 // }
 
+/**
+ * A nunjucks `Extension` (the shape `env.addExtension()`/`addTag()` register
+ * under `env.extensionsList`) — `tags` lists the custom block-tag names it
+ * handles, and `parse` is invoked by `Parser.parseStatement()` for them.
+ */
+export interface NunjucksExtension {
+  tags?: string[]
+  parse(parser: unknown, nodes: unknown, lexer: unknown): unknown
+}
+
 interface NunjucksParserSettings {
 }
 
@@ -122,14 +132,23 @@ export class NunjucksParser {
     this.settings = settings
   }
 
-  parseDocument(document: TextDocument): ReturnType<typeof this.parseContent> {
+  parseDocument(document: TextDocument, extensions?: NunjucksExtension[]): ReturnType<typeof this.parseContent> {
      const content = document.getText();
 
-     return this.parseContent(content)
+     return this.parseContent(content, extensions)
   }
 
-  parseContent (content: string) {
+  /**
+   * `extensions` should be the *real* 11ty project's
+   * `nunjucksEnv.extensionsList` (see `getNunjucksExtensionsForConfig` in
+   * getJSONData.ts) — without it, any custom tag/shortcode registered via
+   * `eleventyConfig.addNunjucksTag`/`addShortcode` fails with "unknown
+   * block tag", which (per `safeParseAsRoot` below) discards everything
+   * parsed after it in the document too.
+   */
+  parseContent (content: string, extensions?: NunjucksExtension[]) {
     const parser = new ExtendedParser(lexer.lex(content));
+    parser.extensions = extensions ?? []
     return parser.safeParseAsRoot()
   }
 
