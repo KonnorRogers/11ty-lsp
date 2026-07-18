@@ -32,7 +32,7 @@ items:
     {{ obj.b }}
     {{ obj.c }}
 
-    {{ page }}
+    {{ page.url }}
 
     {{ page }}
 
@@ -45,5 +45,7 @@ items:
     {% for item in items %}
       {{ item }}
     {% endfor %}
+
+    {% shout foo %}
   </body>
 </html>

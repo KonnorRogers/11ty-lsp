@@ -2,7 +2,7 @@ import {test} from "node:test"
 import assert from 'node:assert';
 
 import * as nodes from "nunjucks/src/nodes.js"
-import { NunjucksParser } from "./nunjucksParser"
+import { NunjucksExtension, NunjucksParser } from "./nunjucksParser"
 import { NEW_LINE } from "../constants";
 
 test("Should properly find a symbol", () => {
@@ -21,6 +21,35 @@ test("Should properly find a lookup target", () => {
   const { ast } = parser.parseContent(`{{ iAmVariable.foo }}`)
   const symbols = ast.findAll(nodes.Symbol)
   assert.equal(symbols[0].value, "iAmVariable")
+})
+
+function fakeShortcodeExtension(tagName: string): NunjucksExtension {
+  return {
+    tags: [tagName],
+    parse(parserArg: any, nodesModule: any) {
+      const tok = parserArg.nextToken()
+      const args = parserArg.parseSignature(true, true)
+      parserArg.advanceAfterBlockEnd(tok.value)
+      return new nodesModule.CallExtension({ __name: tagName }, "run", args, [])
+    },
+  }
+}
+
+test("fails to parse a custom tag without its extension registered", () => {
+  const parser = new NunjucksParser({})
+  const { error } = parser.parseContent(`{% mytag foo %}`)
+  assert.match(error?.message ?? "", /unknown block tag/)
+})
+
+test("parses a custom tag when its extension is passed through", () => {
+  const parser = new NunjucksParser({})
+  const { error, ast } = parser.parseContent(`{% mytag foo, bar.baz %}`, [fakeShortcodeExtension("mytag")])
+
+  assert.equal(error, null)
+  // The custom tag's arguments are still real Symbol/LookupVal nodes,
+  // walkable the same as any other expression.
+  const symbols = ast.findAll(nodes.Symbol)
+  assert.deepEqual(symbols.map((s) => s.value), ["foo", "bar"])
 })
 
 // test("Should properly find a target a lineno + colno", () => {
