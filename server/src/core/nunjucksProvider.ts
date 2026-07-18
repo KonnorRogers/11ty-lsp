@@ -1,8 +1,10 @@
 import { NunjucksParser } from "./nunjucksParser";
 import * as nodes from "nunjucks/src/nodes.js";
+import { Range } from "vscode-css-languageservice";
 
 export class NunjucksProvider {
   constructor(public parser: NunjucksParser) {}
+
   getWordAtCursor (lineContent: string, offset: number, lineNumber: number) {
     const charAtCursor = lineContent[offset]
 
@@ -92,6 +94,52 @@ export class NunjucksProvider {
     keys.push(key)
     return keys
   }
+
+  nodeToRange (node: nodes.LookupVal | nodes.Symbol | nodes.Literal): Range {
+    let value = ""
+    if (node.typename === "Symbol" || node.typename === "Literal") {
+      value = node.value
+    }
+
+    if (node.typename === "LookupVal") {
+      value = node.val.value
+    }
+
+    return {
+      start: {
+        line: node.lineno,
+        character: node.colno,
+      },
+      end: {
+        line: node.lineno,
+        character: node.colno + value.length
+      }
+
+    }
+  }
+
+  getParentsForNode(node: nodes.AnyNode, parents: Map<nodes.AnyNode, nodes.AnyNode | null>) {
+      let p: nodes.AnyNode | null = node;
+      const chain: nodes.AnyNode[] = [];
+      while (p) {
+        chain.push(p);
+        p = parents.get(p) ?? null;
+      }
+      return chain
+      // logger.write(chain.join(" -> "));
+  }
+
+  debugNode (n: nodes.AnyNode | null) {
+    let value = ""
+    if (n?.typename === "LookupVal") {
+      value = "val: " + JSON.stringify(n.val, null, 2)
+    }
+    if (n?.typename === "Symbol" || n?.typename === "Literal") {
+      value = n.value
+    }
+    return n ? `${n.typename}(${n.lineno}:${n.colno}): ${value}` : "null";
+  }
+
 
   dig(obj: unknown, ...args: any) {
     let current: unknown = obj;

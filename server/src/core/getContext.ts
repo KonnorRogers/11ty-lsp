@@ -8,17 +8,17 @@ export function getContext (document: TextDocument, lineNumber: number, lineOffs
   // parts = [line0, sep0, line1, sep1, ..., lineN]
   //   even indices = line contents, odd indices = the exact terminator that followed
   const currentLineContent = parts[lineNumber * 2] ?? ""
-  const contentBeforeOffset = currentLineContent.slice(0, lineOffset)
-  const contentAfterOffset = currentLineContent.slice(lineOffset)
+  const contentOnLineBeforeOffset = currentLineContent.slice(0, lineOffset)
+  const contentOnLineAfterOffset = currentLineContent.slice(lineOffset)
 
   return {
     // full line
-    previousContent: parts.slice(0, lineNumber * 2).join(""),
+    contentBeforeOffset: parts.slice(0, lineNumber * 2).join(""),
     currentLineContent,
-    contentBeforeOffset,
-    contentAfterOffset,
+    contentOnLineBeforeOffset,
+    contentOnLineAfterOffset,
     // full line
-    afterContent: parts.slice(lineNumber * 2 + 1).join(""),
+    contentAfterOffset: parts.slice(lineNumber * 2 + 1).join(""),
   }
 }
 

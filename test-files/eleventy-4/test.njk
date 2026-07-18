@@ -32,12 +32,15 @@ items:
 
     {{ obj }}
     {{ obj.a.b.c.d }}
+    {{ obj.d.e.f }}
     {{ obj.b }}
     {{ obj.c }}
 
-    {{ eleventy }}
+    {{ obj.d.f }}
 
-    {{ page }} {{ eleventy.foo }} {{ obj }}
+    {{ eleventy.version }}
+
+    {{ page }} {{ eleventy.version }} {{ page }}
 
     {{ key }}
 
