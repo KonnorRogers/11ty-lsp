@@ -1,0 +1,23 @@
+.vscode/**
+.github/**
+# npm workspaces symlinks these back to ../client and ../server for module
+# resolution; vsce's zip writer can't follow symlinks and crashes on them.
+# The real content is already included directly via the client/ and
+# server/ entries below, so these are pure duplicates anyway.
+node_modules/11ty-lsp-client
+node_modules/11ty-lsp-server
+client/src/**
+client/tsconfig.json
+client/tsconfig.tsbuildinfo
+server/src/**
+server/tsconfig.json
+server/tsconfig.tsbuildinfo
+test-files/**
+tsconfig.json
+tsconfig.tsbuildinfo
+**/*.map
+**/.eslintrc*
+**/tsconfig.json
+.gitignore
+**/*.test.js
+**/*.test.js.map

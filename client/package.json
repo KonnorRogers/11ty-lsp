@@ -4,10 +4,10 @@
   "author": "Konnor Rogers <konnor5456@gmail.com>",
   "license": "MIT",
   "version": "0.0.1",
-  "publisher": "REPLACE_ME",
+  "publisher": "KonnorRogers",
   "repository": {
     "type": "git",
-    "url": "REPLACE_ME"
+    "url": "git+https://github.com/KonnorRogers/11ty-lsp"
   },
   "engines": {
     "vscode": "^1.75.0"

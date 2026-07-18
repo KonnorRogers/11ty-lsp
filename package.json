@@ -12,17 +12,28 @@
     "onLanguage:plaintext"
   ],
   "main": "./client/out/vscode",
+  "workspaces": [
+    "client",
+    "server"
+  ],
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run build",
     "build": "tsc --build",
     "watch": "tsc -b -w",
     "start": "npm run watch",
-    "postinstall": "cd client && npm install && cd ../server && npm install && cd .."
+    "test": "npm run test --workspaces --if-present",
+    "package": "vsce package",
+    "publish": "vsce publish"
   },
   "devDependencies": {
     "@11ty/eleventy": "^4.0.0-alpha.10",
+    "@awesome.me/buildawesome": "^4.0.0-alpha.10",
     "@types/node": "^20.19.10",
+    "@vscode/vsce": "^3.9.2",
     "typescript": "^5.9.2"
+  },
+  "overrides": {
+    "chokidar": "^3.6.0"
   },
   "contributes": {
     "title": "11ty-lsp",
@@ -53,8 +64,5 @@
         "title": "Restart 11ty LSP Server"
       }
     ]
-  },
-  "dependencies": {
-    "@awesome.me/buildawesome": "^4.0.0-alpha.10"
   }
 }

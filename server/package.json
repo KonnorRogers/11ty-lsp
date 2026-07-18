@@ -1,5 +1,5 @@
 {
-  "name": "11ty-lsp",
+  "name": "11ty-lsp-server",
   "description": "LSP for 11ty",
   "version": "0.0.1",
   "author": "Konnor Rogers",
