@@ -260,7 +260,13 @@ declare module 'nunjucks/src/nodes.js' {
   class Pos<T extends string = "Pos"> extends Node<T> {}
   class Compare<T extends string = "Compare"> extends Node<T> {}
   class CompareOperand<T extends string = "CompareOperand"> extends Node<T> {}
-  class CallExtension<T extends string = "CallExtension"> extends Node<T> {}
+  class CallExtension<T extends string = "CallExtension"> extends Node<T> {
+    args: AnyNode
+    contentArgs: AnyNode[]
+    extName: string
+    prop: string
+  }
+
   class CallExtensionAsync<T extends string = "CallExtensionAsync"> extends Node<T> {}
 
   function print(str: string, indent: string, line: number): void

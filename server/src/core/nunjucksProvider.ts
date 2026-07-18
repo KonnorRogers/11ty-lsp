@@ -1,5 +1,5 @@
 import { NunjucksParser } from "./nunjucksParser";
-import { LookupVal } from "nunjucks/src/nodes.js";
+import * as nodes from "nunjucks/src/nodes.js";
 
 export class NunjucksProvider {
   constructor(public parser: NunjucksParser) {}
@@ -48,7 +48,24 @@ export class NunjucksProvider {
     }
   }
 
-  getKeysForLookupValNode (node: LookupVal) {
+  serializeNode(node: any): any {
+    if (node == null || typeof node !== "object") return node;
+    if (Array.isArray(node)) return node.map((n) => this.serializeNode(n));
+    if (!(node instanceof nodes.Node)) return node;
+
+    const out: Record<string, unknown> = {
+      typename: node.typename,
+      lineno: node.lineno,
+      colno: node.colno,
+    };
+    for (const field of node.fields ?? []) {
+      // @ts-expect-error
+      out[field] = this.serializeNode(node[field]);
+    }
+    return out;
+  }
+
+  getKeysForLookupValNode (node: nodes.LookupVal) {
     let target = null
     const keys = []
     let currentNode = node

@@ -27,6 +27,7 @@ export function serializeError(e: unknown): Record<string, unknown> | unknown {
 }
 
 export class Logger {
+  stream = writeStream
   write (message: object | unknown) {
     if (typeof message === "object") {
       writeStream.write(JSON.stringify(message, null, 2))

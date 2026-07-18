@@ -6,6 +6,7 @@ import * as definitions from "./definitions"
 import { AnyNode, Literal, LookupVal, Symbol as SymbolNode } from "nunjucks/src/nodes.js";
 import { logger } from "../logger";
 import { NunjucksProvider } from "./nunjucksProvider";
+import * as nodes from "nunjucks/src/nodes.js"
 
 export class NunjucksHoverProvider extends NunjucksProvider {
   provideHover(
@@ -24,12 +25,53 @@ export class NunjucksHoverProvider extends NunjucksProvider {
 
     // do we need to parse??
     const result = this.parser.parseDocument(document);
-    let currentNode = this.parser.findNodeAtPosition(result.ast, position.line, position.character)
+    let { node, parents } = this.parser.findNodeAtPosition(result.ast, position.line, position.character)
+    // logger.write(JSON.stringify(this.serializeNode(result.ast), null, 2))
 
-    const hover = this.wordToHoverDocumentationForNode(currentNode, word, data);
+    if (node) {
+      let p: nodes.AnyNode | null = node;
+      const chain: string[] = [];
+      while (p) {
+        chain.push(this.debugNode(p));
+        p = parents.get(p) ?? null;
+      }
+      logger.write(chain.join(" -> "));
+      // logger.write({ parents: JSON.stringify(parentNodes, null, 2) })
+    }
+    // logger.write({hi: "hi"})
+    const hover = this.wordToHoverDocumentationForNode(node, word, data);
 
     // Find what's at the current position
     return hover;
+  }
+
+  debugNode (n: nodes.AnyNode | null) {
+    let value = ""
+    if (n?.typename === "LookupVal") {
+      value = "val: " + JSON.stringify(n.val, null, 2)
+    }
+    if (n?.typename === "Symbol" || n?.typename === "Literal") {
+      value = n.value
+    }
+    return n ? `${n.typename}(${n.lineno}:${n.colno}): ${value}` : "null";
+  }
+
+  findParentNodes (node: nodes.AnyNode) {
+    const parents = [node]
+    let currentNode = node
+    while (true) {
+      // @ts-expect-error
+      if (currentNode.parent) {
+        // @ts-expect-error
+        parents.unshift(currentNode.parent)
+        // @ts-expect-error
+        currentNode = currentNode.parent
+      } else {
+        break
+      }
+    }
+
+    return parents
   }
 
   /**

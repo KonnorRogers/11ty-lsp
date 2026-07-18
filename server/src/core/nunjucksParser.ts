@@ -1,8 +1,10 @@
 import { TextDocument } from "vscode-languageserver-textdocument";
 import * as lexer from 'nunjucks/src/lexer.js'
 import * as nodes from 'nunjucks/src/nodes.js'
+import {Node} from 'nunjucks/src/nodes.js'
 import { Parser } from "nunjucks/src/parser.js";
 import { Range } from "vscode-languageserver";
+import * as fs from "node:fs"
 
 // interface NunjucksTemplateInfo {
 //   error: {
@@ -43,6 +45,7 @@ class ExtendedParser extends Parser {
       ast: this.parseAsRoot(parsedNodes)
     }
   }
+
   parseAsRoot (parsedNodes = this.parseNodes()) {
     return new nodes.Root(0, 0, parsedNodes);
   }
@@ -130,15 +133,6 @@ export class NunjucksParser {
     return parser.safeParseAsRoot()
   }
 
-  findClosestNodeOfType (ast: nodes.Root, node: nodes.AnyNode) {
-    const visit = () => {
-    }
-    while (true) {
-
-    }
-
-  }
-
   walk(
     node: any,
     visit: (node: nodes.AnyNode, parent: nodes.AnyNode | null) => boolean | void,
@@ -161,10 +155,15 @@ export class NunjucksParser {
     }
   }
 
-  findNodeAtPosition(root: nodes.Root, line: number, character: number): nodes.AnyNode | null {
+  findNodeAtPosition(root: nodes.Root, line: number, character: number): {
+    node: nodes.AnyNode | null,
+    parents: Map<nodes.AnyNode, nodes.AnyNode | null>
+} {
     let best: nodes.AnyNode | null = null;
+    const parents = new Map<nodes.AnyNode, nodes.AnyNode | null>();
 
-    this.walk(root, (node) => {
+    this.walk(root, (node, parent) => {
+      parents.set(node, parent);
       if (typeof node?.lineno === "number" && typeof node?.colno === "number") {
         if (node.lineno === line && node.colno <= character) {
           // nearest token starting at or before the cursor wins
@@ -174,6 +173,72 @@ export class NunjucksParser {
         }
       }
     });
-    return best;
+    return { node: best, parents };
+  }
+
+  // This is hacky, but this is just a debugging function anyway
+  print(str: string, indent?: number | null, inline?: boolean | null | undefined, writeStream: fs.WriteStream | typeof process.stdout = process.stdout) {
+    var lines = str.split('\n');
+
+    lines.forEach((line, i) => {
+      if (line && ((inline && i > 0) || !inline)) {
+        let str = ' '
+        if (indent) {
+          str = str.repeat(indent);
+        }
+        writeStream.write(str)
+      }
+      const nl = (i === lines.length - 1) ? '' : '\n';
+      writeStream.write(`${line}${nl}`);
+    });
+  }
+
+  // Print the AST in a nicely formatted tree format for debuggin
+  printNodes(node: any, indent: number, writeStream: fs.WriteStream | typeof process.stdout = process.stdout) {
+    indent = indent || 0;
+
+    this.print(node.typename + ': ', indent, null, writeStream);
+
+    if (node instanceof nodes.NodeList) {
+      this.print('\n', null, null, writeStream);
+      node.children.forEach((n) => {
+        this.printNodes(n, indent + 2, writeStream);
+      });
+    } else if (node instanceof nodes.CallExtension) {
+      this.print(`${node.extName}.${node.prop}\n`, null, null, writeStream);
+
+      if (node.args) {
+        this.printNodes(node.args, indent + 2, writeStream);
+      }
+
+      if (node.contentArgs) {
+        node.contentArgs.forEach((n) => {
+          this.printNodes(n, indent + 2, writeStream);
+        });
+      }
+    } else {
+      let nodes: any[] = [];
+      let props: Record<string,unknown> | null = null;
+
+      node.iterFields((val: any, fieldName: string) => {
+        if (val instanceof Node) {
+          nodes.push([fieldName, val]);
+        } else {
+          props = props || {};
+          props[fieldName] = val;
+        }
+      });
+
+      if (props) {
+        this.print(JSON.stringify(props, null, 2) + '\n', null, true, writeStream);
+      } else {
+        this.print('\n', null, null, writeStream);
+      }
+
+      nodes.forEach(([fieldName, n]) => {
+        this.print(`[${fieldName}] =>`, indent + 2, null, writeStream);
+        this.printNodes(n, indent + 4, writeStream);
+      });
+    }
   }
 }
