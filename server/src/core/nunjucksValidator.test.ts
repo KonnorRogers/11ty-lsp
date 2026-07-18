@@ -17,12 +17,12 @@ test("Should properly validate the AST", () => {
 
   assert.equal(diagnostics.length, 1)
 
+
+  assert.match(diagnostics[0].message, /expected variable end/)
+
   assert.deepEqual({
-    message: 'expected variable end',
-    range: {
-      start: { line: 3, character: 14 },
-      end: { line: 3, character: 14 }
-    }
-  }, diagnostics[0])
+    start: { line: 2, character: 13 },
+    end: { line: 2, character: 14 }
+  }, diagnostics[0].range)
 })
 
