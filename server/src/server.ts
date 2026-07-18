@@ -80,6 +80,18 @@ function getData(documentUri: string): DataOrError | undefined {
 }
 
 /**
+ * `getDataForFile` only ever returns real per-file data on success — when
+ * the 11ty build itself failed, its `!(data instanceof Error)` guard means
+ * it always returns `null`, silently swallowing the Error. Diagnostics
+ * need the raw Error itself (from `getData`) to surface an "Error
+ * compiling 11ty" banner instead of just showing no data quietly.
+ */
+function getDataOrErrorForFile(documentUri: string): DataOrError | undefined | null {
+  const data = getDataForFile(documentUri);
+  return data == null ? getData(documentUri) : data;
+}
+
+/**
  * The project's real registered nunjucks tags/shortcodes (from the same
  * 11ty build that produced `dataByConfig`), so our own parser recognizes
  * custom tags like `eleventyConfig.addNunjucksTag`/`addShortcode` instead
@@ -259,7 +271,10 @@ connection.onInitialize((params) => {
       createCssServicePlugin(),
       createNunjucksServicePlugin({
         getSettings: (uri) => getDocumentSettings(uri),
-        getData: (uri) => getDataForFile(uri),
+        // The diagnostics path specifically needs the raw Error (if any)
+        // to surface the "Error compiling 11ty" banner — see
+        // getDataOrErrorForFile's doc comment.
+        getData: (uri) => getDataOrErrorForFile(uri),
         getExtensions: (uri) => getExtensionsForFile(uri),
       }),
     ],
