@@ -13,7 +13,7 @@ let client: LanguageClient;
 export function activate(context: ExtensionContext) {
   // The server is implemented in node
   const serverModule = context.asAbsolutePath(
-    path.join("server", "out", "server.js")
+    path.join("server", "dist", "server.js")
   );
 
   // If the extension is launched in debug mode then the debug server options are used
@@ -23,6 +23,9 @@ export function activate(context: ExtensionContext) {
     debug: {
       module: serverModule,
       transport: TransportKind.ipc,
+      // Opens an inspector port on the forked server process so the
+      // "Attach to Server" launch config can attach a debugger to it.
+      options: { execArgv: ["--nolazy", "--inspect=6009"] },
     },
   };
 

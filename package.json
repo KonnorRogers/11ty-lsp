@@ -4,6 +4,11 @@
   "author": "Konnor Rogers <konnor5456@gmail.com>",
   "license": "MIT",
   "version": "0.0.1",
+  "publisher": "KonnorRogers",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KonnorRogers/11ty-lsp"
+  },
   "categories": [],
   "engines": {
     "vscode": "^1.75.0"
@@ -11,17 +16,22 @@
   "activationEvents": [
     "onLanguage:plaintext"
   ],
-  "main": "./client/out/vscode",
+  "main": "./client/dist/vscode.js",
   "workspaces": [
     "client",
     "server"
   ],
   "scripts": {
-    "vscode:prepublish": "npm run build",
-    "build": "tsc --build",
-    "watch": "tsc -b -w",
+    "vscode:prepublish": "npm run package-extension",
+    "typecheck": "tsc --build",
+    "typecheck:watch": "tsc -b -w",
+    "bundle": "node esbuild.mjs",
+    "bundle:watch": "node esbuild.mjs --watch",
+    "watch": "concurrently -n tsc,esbuild -c blue,green \"npm run typecheck:watch\" \"npm run bundle:watch\"",
     "start": "npm run watch",
     "test": "npm run test --workspaces --if-present",
+    "package-extension": "npm run typecheck && node esbuild.mjs --production",
+    "build": "npm run package-extension",
     "package": "vsce package",
     "publish": "vsce publish"
   },
@@ -30,6 +40,8 @@
     "@awesome.me/buildawesome": "^4.0.0-alpha.10",
     "@types/node": "^20.19.10",
     "@vscode/vsce": "^3.9.2",
+    "concurrently": "^10.0.3",
+    "esbuild": "^0.28.1",
     "typescript": "^5.9.2"
   },
   "overrides": {
