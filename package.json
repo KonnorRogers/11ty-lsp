@@ -1,10 +1,10 @@
 {
-  "name": "11ty-lsp",
+  "name": "11ty-lsp-root",
   "description": "11ty-lsp",
   "author": "Konnor Rogers <konnor5456@gmail.com>",
   "license": "MIT",
   "version": "0.0.1",
-  "publisher": "KonnorRogers",
+  "publisher": "konnorrogers",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/KonnorRogers/11ty-lsp"
@@ -18,7 +18,7 @@
   ],
   "main": "./client/dist/vscode.js",
   "workspaces": [
-    "client",
+    "vscode",
     "server"
   ],
   "scripts": {

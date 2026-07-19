@@ -1,5 +1,5 @@
 {
-  "name": "11ty-lsp-server",
+  "name": "11ty-lsp",
   "description": "LSP for 11ty",
   "version": "0.0.1",
   "author": "Konnor Rogers",
@@ -9,7 +9,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "REPLACE_ME"
+    "url": "git+https://github.com/KonnorRogers/11ty-lsp"
   },
   "scripts": {
     "test": "node --import tsx --test ./src/**/*.test.ts"
