@@ -22,7 +22,6 @@
     "server"
   ],
   "scripts": {
-    "vscode:prepublish": "npm run package-extension",
     "typecheck": "tsc --build",
     "typecheck:watch": "tsc -b -w",
     "bundle": "node esbuild.mjs",
@@ -31,9 +30,10 @@
     "start": "npm run watch",
     "test": "npm run test --workspaces --if-present",
     "package-extension": "npm run typecheck && node esbuild.mjs --production",
-    "build": "npm run package-extension",
-    "package": "vsce package",
-    "publish": "vsce publish"
+    "vscode:build": "npm run package-extension",
+    "vscode:package": "vsce package",
+    "vscode:prepublish": "npm run package-extension",
+    "vscode:publish": "vsce publish"
   },
   "devDependencies": {
     "@11ty/eleventy": "^4.0.0-alpha.10",
