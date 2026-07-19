@@ -18,4 +18,8 @@ if (!version) {
 const data = `// This file is auto-generated. Do not manually edit this.
 export const version = "${version}";`
 
-fs.writeFileSync(path.resolve(__dirname, "../src/version.js"), data)
+// Must be .ts, not .js: server.ts does `import { version } from "./version"`,
+// and TypeScript resolves that to a co-located version.ts before ever
+// considering a version.js — writing .js here left this whole generator
+// silently dead (the hand-authored version.ts always won instead).
+fs.writeFileSync(path.resolve(__dirname, "../src/version.ts"), data)

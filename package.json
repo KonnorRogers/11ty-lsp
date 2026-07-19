@@ -25,7 +25,9 @@
     "build": "npm run package-vscode",
     "vscode:package": "npm run package -w vscode",
     "vscode:publish": "npm run publish -w vscode",
-    "server:publish": "npm run typecheck && npm publish -w server"
+    "vscode:version": "npm version --no-git-tag-version -w vscode",
+    "server:publish": "npm run typecheck && npm publish -w server",
+    "server:version": "npm version --no-git-tag-version -w server"
   },
   "devDependencies": {
     "@11ty/eleventy": "^4.0.0-alpha.10",
