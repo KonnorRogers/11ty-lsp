@@ -1,18 +1,28 @@
 {
   "name": "11ty-lsp",
-  "description": "LSP for 11ty",
-  "version": "0.0.1",
+  "description": "Standalone language server for 11ty Nunjucks templates — works with any LSP client (VS Code, Neovim, etc.)",
+  "version": "0.0.0",
   "author": "Konnor Rogers",
   "license": "MIT",
   "engines": {
-    "node": "*"
+    "node": ">=18"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/KonnorRogers/11ty-lsp"
+    "url": "git+https://github.com/KonnorRogers/11ty-lsp",
+    "directory": "server"
   },
+  "bin": {
+    "11ty-lsp": "./out/server.js"
+  },
+  "files": [
+    "out"
+  ],
   "scripts": {
-    "test": "node --import tsx --test ./src/**/*.test.ts"
+    "test": "node --import tsx --test ./src/**/*.test.ts",
+    "update-version": "node ./scripts/update-version.js",
+    "version": "npm run update-version && git add src/version.js",
+    "prepublishOnly": "tsc -b"
   },
   "dependencies": {
     "@types/nunjucks": "^3.2.6",

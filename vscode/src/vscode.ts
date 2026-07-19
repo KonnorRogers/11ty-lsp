@@ -11,21 +11,31 @@ import {
 let client: LanguageClient;
 
 export function activate(context: ExtensionContext) {
-  // The server is implemented in node
+  // The server is bundled alongside the client (see esbuild.mjs) — it's
+  // *not* the sibling `server/` workspace at dev time, since the packaged
+  // extension only ships this directory's own tree.
   const serverModule = context.asAbsolutePath(
-    path.join("server", "dist", "server.js")
+    path.join("dist", "server.js")
   );
+
+  // `typescript` is left external by esbuild (see esbuild.mjs) and vendored
+  // into dist/vendor/typescript instead of node_modules — vsce's packaging
+  // mode for this monorepo layout excludes any real node_modules dir
+  // outright. NODE_PATH makes plain `require("typescript")` still resolve
+  // there at runtime.
+  const vendorPath = context.asAbsolutePath(path.join("dist", "vendor"));
+  const serverEnv = { ...process.env, NODE_PATH: vendorPath };
 
   // If the extension is launched in debug mode then the debug server options are used
   // Otherwise the run options are used
   const serverOptions: ServerOptions = {
-    run: { module: serverModule, transport: TransportKind.ipc },
+    run: { module: serverModule, transport: TransportKind.ipc, options: { env: serverEnv } },
     debug: {
       module: serverModule,
       transport: TransportKind.ipc,
       // Opens an inspector port on the forked server process so the
       // "Attach to Server" launch config can attach a debugger to it.
-      options: { execArgv: ["--nolazy", "--inspect=6009"] },
+      options: { execArgv: ["--nolazy", "--inspect=6009"], env: serverEnv },
     },
   };
 

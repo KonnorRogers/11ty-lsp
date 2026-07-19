@@ -1,22 +1,14 @@
 {
   "name": "11ty-lsp-root",
-  "description": "11ty-lsp",
+  "description": "11ty-lsp monorepo — not published anywhere itself; see vscode/ (the VS Code extension) and server/ (the standalone LSP, published as \"11ty-lsp\" on npm)",
   "author": "Konnor Rogers <konnor5456@gmail.com>",
   "license": "MIT",
   "version": "0.0.1",
-  "publisher": "konnorrogers",
+  "private": true,
   "repository": {
     "type": "git",
     "url": "git+https://github.com/KonnorRogers/11ty-lsp"
   },
-  "categories": [],
-  "engines": {
-    "vscode": "^1.75.0"
-  },
-  "activationEvents": [
-    "onLanguage:plaintext"
-  ],
-  "main": "./client/dist/vscode.js",
   "workspaces": [
     "vscode",
     "server"
@@ -29,11 +21,11 @@
     "watch": "concurrently -n tsc,esbuild -c blue,green \"npm run typecheck:watch\" \"npm run bundle:watch\"",
     "start": "npm run watch",
     "test": "npm run test --workspaces --if-present",
-    "package-extension": "npm run typecheck && node esbuild.mjs --production",
-    "vscode:build": "npm run package-extension",
-    "vscode:package": "vsce package",
-    "vscode:prepublish": "npm run package-extension",
-    "vscode:publish": "vsce publish"
+    "package-vscode": "npm run typecheck && node esbuild.mjs --production",
+    "build": "npm run package-vscode",
+    "vscode:package": "npm run package -w vscode",
+    "vscode:publish": "npm run publish -w vscode",
+    "server:publish": "npm run typecheck && npm publish -w server"
   },
   "devDependencies": {
     "@11ty/eleventy": "^4.0.0-alpha.10",
@@ -46,35 +38,5 @@
   },
   "overrides": {
     "chokidar": "^3.6.0"
-  },
-  "contributes": {
-    "title": "11ty-lsp",
-    "languages": [
-      {
-        "id": "nunjucks",
-        "aliases": [
-          "Nunjucks",
-          "nunjucks"
-        ],
-        "extensions": [
-          ".njk",
-          ".nunjucks",
-          ".html"
-        ],
-        "configuration": "./language-configuration.json"
-      }
-    ],
-    "properties": {
-      "eleventy.enabledFeatures": {
-        "type": "array",
-        "default": ["hover", "completion", "diagnostics"]
-      }
-    },
-    "commands": [
-      {
-        "command": "11ty-lsp.restart",
-        "title": "Restart 11ty LSP Server"
-      }
-    ]
   }
 }

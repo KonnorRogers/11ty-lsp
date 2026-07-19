@@ -1,0 +1,63 @@
+{
+  "name": "11ty-lsp-client",
+  "displayName": "11ty-lsp",
+  "description": "VS Code extension for 11ty-lsp — Nunjucks/HTML/CSS language support for 11ty projects",
+  "author": "Konnor Rogers <konnor5456@gmail.com>",
+  "license": "MIT",
+  "version": "0.0.1",
+  "publisher": "konnorrogers",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KonnorRogers/11ty-lsp",
+    "directory": "vscode"
+  },
+  "categories": [],
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "activationEvents": [
+    "onLanguage:plaintext"
+  ],
+  "main": "./dist/vscode.js",
+  "scripts": {
+    "vscode:prepublish": "cd .. && npm run package-vscode",
+    "package": "vsce package --no-dependencies",
+    "publish": "vsce publish --no-dependencies"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^8.1.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0"
+  },
+  "contributes": {
+    "title": "11ty-lsp",
+    "languages": [
+      {
+        "id": "nunjucks",
+        "aliases": [
+          "Nunjucks",
+          "nunjucks"
+        ],
+        "extensions": [
+          ".njk",
+          ".nunjucks",
+          ".html"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "properties": {
+      "eleventy.enabledFeatures": {
+        "type": "array",
+        "default": ["hover", "completion", "diagnostics"]
+      }
+    },
+    "commands": [
+      {
+        "command": "11ty-lsp.restart",
+        "title": "Restart 11ty LSP Server"
+      }
+    ]
+  }
+}

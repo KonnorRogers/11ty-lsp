@@ -1,0 +1,16 @@
+# vsce packages the extension from *within* this directory (vscode/) — see
+# the root esbuild.mjs and this package's package/publish scripts (which
+# pass --no-dependencies so vsce doesn't try to walk the whole monorepo
+# workspace root). Everything needed at runtime is bundled into
+# dist/vscode.js + dist/server.js, except `typescript` (left external — see
+# esbuild.mjs — and vendored into dist/vendor/typescript by the same build
+# step, deliberately *not* under node_modules — see esbuild.mjs's comment).
+src/**
+out/**
+tsconfig.json
+tsconfig.tsbuildinfo
+
+**/*.map
+.gitignore
+**/*.test.js
+**/*.test.js.map

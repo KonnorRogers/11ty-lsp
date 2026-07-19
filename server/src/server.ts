@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { ELEVENTY_OR_BUILDAWESOME_PACKAGES } from "./constants";
 
 import * as path from "node:path"
@@ -27,15 +28,13 @@ import { createNunjucksLanguagePlugin } from "./core/nunjucksVirtualCode";
 import { createNunjucksServicePlugin } from "./core/nunjucksServicePlugin";
 import { getJSONData, getNunjucksExtensionsForConfig } from "./core/getJSONData";
 import { DataOrError } from "./constants";
+import { version } from "./version";
 
 const dataByConfig = new Map<string, DataOrError>();
 
 const RESTART_COMMAND = '11ty-lsp.restart';
 const name = "11ty-lsp"
 
-const packageData = JSON.parse(fs.readFileSync(path.resolve(__dirname, "..", "..", "package.json"), { encoding: "utf-8" }))
-const packageName = packageData.name
-const packageVersion = packageData.version
 
 /**
  * per-file data, this compares input keys from 11ty
@@ -293,8 +292,8 @@ connection.onInitialize((params) => {
   );
 
   result.serverInfo = {
-    name: packageName,
-    version: packageVersion,
+    name: name,
+    version: version,
   };
 
   return result;
