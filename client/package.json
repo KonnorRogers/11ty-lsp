@@ -1,5 +1,5 @@
 {
-  "name": "11ty-lsp-vscode",
+  "name": "11ty-lsp-client",
   "displayName": "11ty-lsp",
   "description": "LSP client for 11ty",
   "author": "Konnor Rogers <konnor5456@gmail.com>",
