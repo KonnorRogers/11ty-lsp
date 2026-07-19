@@ -43,6 +43,39 @@ export function getNunjucksExtensionsForConfig(configPath: string): NunjucksExte
   return extensionsByConfigPath.get(configPath)
 }
 
+/**
+ * A project's own config can set a *relative* `dir.input` (11ty's own
+ * default is even "./"), and 11ty always resolves that against
+ * `process.cwd()` — there's no way to override this from the Eleventy
+ * constructor's own `input` argument, since `ProjectDirectories.setViaConfigObject`
+ * unconditionally re-resolves `dir.input` from the loaded config over
+ * whatever we passed in. Since this server is *one* long-lived process
+ * serving every 11ty project a client has open, `process.cwd()` is fixed
+ * for the server's whole lifetime, so without this, one project's relative
+ * `dir.input` could resolve into (and build/fail on) a completely
+ * different project's directory. Queuing every build through a real
+ * `process.chdir()` — one at a time, restored in a `finally` — is the only
+ * way to make each build see the correct cwd, however 11ty ends up
+ * resolving it internally.
+ */
+let buildQueue: Promise<unknown> = Promise.resolve()
+
+function runInDirectory<T>(dir: string, run: () => Promise<T>): Promise<T> {
+  const result = buildQueue.then(async () => {
+    const previousCwd = process.cwd()
+    process.chdir(dir)
+    try {
+      return await run()
+    } finally {
+      process.chdir(previousCwd)
+    }
+  })
+  // Keep the queue moving even if this build failed — `result` itself still
+  // carries the rejection for its own caller.
+  buildQueue = result.then(() => undefined, () => undefined)
+  return result
+}
+
 export async function getJSONData({ configPath, output, invalidate = [] }:
   { configPath: string; output: string; invalidate?: string[] }): Promise<DataOrError> {
   let eleventyRuntime;
@@ -84,10 +117,18 @@ export async function getJSONData({ configPath, output, invalidate = [] }:
     options.configPath = baseConfigPath
   }
 
+  // Deliberately `undefined`, not an explicit input dir: 11ty normalizes an
+  // *absolute* input path via `path.relative(".", absoluteInput)` — once
+  // runInDirectory below has already chdir'd into this exact directory,
+  // that collapses to "" (a path relative to itself) and 11ty's own
+  // existence check then rejects the empty string outright. Leaving this
+  // undefined lets 11ty fall back to its own relative default ("./"),
+  // which now correctly resolves against the chdir'd cwd instead.
+  const projectDir = path.dirname(options.configPath)
   eleventy = new eleventyRuntime.Eleventy(undefined, output, options);
 
   try {
-    return await eleventy.toJSON();
+    return await runInDirectory(projectDir, () => eleventy.toJSON());
   } catch (e) {
     return e as DataError;
   }

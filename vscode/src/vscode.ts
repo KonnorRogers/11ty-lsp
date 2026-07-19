@@ -39,13 +39,13 @@ export function activate(context: ExtensionContext) {
     },
   };
 
-  // Options to control the language client
   const clientOptions: LanguageClientOptions = {
-    // Register the server for all documents by default
+    // Register the server for all documents by default. We *could* scope this down to like .njk / .json / etc etc, but theres so many possible files its probably better just to activate it on all :shrug:
     documentSelector: [{ scheme: "file", language: "*" }],
     synchronize: {
       // Notify the server about file changes to '.clientrc files contained in the workspace
-      fileEvents: workspace.createFileSystemWatcher("**/.clientrc"),
+      // We should maybe expose this better?
+      fileEvents: workspace.createFileSystemWatcher("**/*(.eleventyrc|eleventyrc)"),
     },
   };
 

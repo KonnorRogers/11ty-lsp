@@ -28,7 +28,7 @@ import { createNunjucksLanguagePlugin } from "./core/nunjucksVirtualCode";
 import { createNunjucksServicePlugin } from "./core/nunjucksServicePlugin";
 import { getJSONData, getNunjucksExtensionsForConfig } from "./core/getJSONData";
 import { DataOrError } from "./constants";
-import { version } from "./version";
+// import { version } from "./version";
 
 const dataByConfig = new Map<string, DataOrError>();
 
@@ -131,7 +131,7 @@ function scheduleRebuild(documentUri: string, delay = 300) {
   clearTimeout(rebuildTimers.get(documentUri));
   rebuildTimers.set(documentUri, setTimeout(() => {
     rebuildTimers.delete(documentUri);
-    rebuildAndReport(documentUri);
+    rebuildAndReport(documentUri).catch((e) => connection.console.error(`Error rebuilding ${documentUri}: ${e instanceof Error ? e.stack ?? e.message : e}`));
   }, delay));
 }
 
@@ -293,7 +293,7 @@ connection.onInitialize((params) => {
 
   result.serverInfo = {
     name: name,
-    version: version,
+    // version: version,
   };
 
   return result;

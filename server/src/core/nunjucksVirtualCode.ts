@@ -1,10 +1,7 @@
 import type { CodeInformation, CodeMapping, LanguagePlugin, VirtualCode } from "@volar/language-core"
-// Augments `LanguagePlugin` with the `typescript` field used below — needed
-// purely for its module-augmentation side effect (see @volar/typescript's
-// index.d.ts).
-import type {} from "@volar/typescript"
 import type * as nodes from "nunjucks/src/nodes.js"
 import * as ts from "typescript"
+import type { TypeScriptExtraServiceScript } from '@volar/typescript';
 import { getLanguageService as getHTMLLanguageService } from "vscode-html-languageservice"
 import { TextDocument } from "vscode-languageserver-textdocument"
 import type { URI } from "vscode-uri"
@@ -12,7 +9,8 @@ import { getDocumentRegions } from "../embeddedSupport"
 import { jsonValueToTsType } from "./jsonToTsType"
 import { NunjucksExtension, NunjucksParser } from "./nunjucksParser"
 
-const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/
+// Regex of if the word is a proper key. non-spaces and "_" or "-" are all valid.
+const IDENTIFIER_RE = /^(\S|_|-)*$/
 const DATA_VAR = "data"
 
 interface Segment {
@@ -56,7 +54,9 @@ function transcribeChain(node: nodes.AnyNode, document: TextDocument): Transcrib
 
   if (node.typename === "LookupVal") {
     const target = transcribeChain(node.target as nodes.AnyNode, document)
-    if (!target) return null
+    if (!target) {
+      return null
+    }
 
     // `val`'s declared type (`Token & { value: unknown }`) doesn't expose
     // `typename`, but at runtime it's a real AST node — cast to check it.
@@ -129,7 +129,9 @@ function collectExpressions(node: unknown, document: TextDocument, bound: Readon
   if (node == null || typeof node !== "object") return
 
   if (Array.isArray(node)) {
-    for (const item of node) collectExpressions(item, document, bound, out)
+    for (const item of node) {
+      collectExpressions(item, document, bound, out)
+    }
     return
   }
 
@@ -174,7 +176,8 @@ function collectExpressions(node: unknown, document: TextDocument, bound: Readon
  * (`{{ page. }}`, mid-typing) — capturing the run of same-line whitespace
  * between the dot and the tag's closing delimiter.
  */
-const DANGLING_DOT_RE = /\.([ \t]+)(?=-?(?:%\}|\}\}))/g
+const DANGLING_DOT_RE = /\.\s+/g
+
 
 /**
  * Nunjucks's parser throws on a dangling `.` with nothing after it, and
@@ -242,6 +245,16 @@ export function buildNunjucksTypeScriptSource(
       })
     }
   }
+
+  // Every template's synthesized file declares its own `data` — without
+  // this, the file has no imports/exports, so TS treats it as a global
+  // script rather than a module, and `declare const data` from every open
+  // template ends up merged into one shared global scope. Whichever
+  // template's declaration TS resolves first then "wins" for *all* of them,
+  // so e.g. hovering `obj` in one template can show another template's data
+  // shape. Forcing module scope via a top-level `export {}` gives each
+  // synthesized file its own local `data`.
+  generated += `export {};\n`
 
   return { text: generated, mappings }
 }
@@ -330,6 +343,7 @@ export class CssRegionVirtualCode implements VirtualCode {
   languageId = "css"
   mappings: CodeMapping[] = []
   snapshot: ts.IScriptSnapshot = new StringScriptSnapshot("")
+
 
   update(documentText: string) {
     const document = TextDocument.create("untitled:nunjucks", "html", 0, documentText)
@@ -428,7 +442,7 @@ export function createNunjucksLanguagePlugin(
     // in a real `ts.Program` — completion/hover on it would silently come
     // back empty.
     typescript: {
-      extraFileExtensions: [],
+		  extraFileExtensions: [{ extension: 'nunjucks', isMixedContent: true, scriptKind: ts.ScriptKind.Deferred }],
       getServiceScript(root) {
         const tsCode = root.embeddedCodes?.find((code) => code.id === "nunjucks-data-ts")
         if (!tsCode) return undefined
@@ -438,6 +452,28 @@ export function createNunjucksLanguagePlugin(
           scriptKind: ts.ScriptKind.TS,
         }
       },
+		  getExtraServiceScripts(fileName, root) {
+			  const scripts: TypeScriptExtraServiceScript[] = [];
+			  for (const code of forEachEmbeddedCode(root)) {
+				  if (code.languageId === 'javascript') {
+					  scripts.push({
+						  fileName: fileName + '.' + code.id + '.js',
+						  code,
+						  extension: '.js',
+						  scriptKind: 1 satisfies ts.ScriptKind.JS,
+					  });
+				  }
+				  else if (code.languageId === 'typescript') {
+					  scripts.push({
+						  fileName: fileName + '.' + code.id + '.ts',
+						  code,
+						  extension: '.ts',
+						  scriptKind: 3 satisfies ts.ScriptKind.TS,
+					  });
+				  }
+			  }
+			  return scripts;
+		  },
     },
     createVirtualCode(uri, languageId, snapshot) {
       if (!isNunjucksDocument(uri, languageId)) return undefined
@@ -452,4 +488,74 @@ export function createNunjucksLanguagePlugin(
       return virtualCode
     },
   }
+}
+
+/**
+ * https://github.com/volarjs/starter/blob/master/packages/language-server/src/languagePlugin.ts#L78-L143
+ */
+function* getEmbeddedCodes(snapshot: ts.IScriptSnapshot, htmlDocument: html.HTMLDocument): Generator<VirtualCode> {
+	const styles = htmlDocument.roots.filter(root => root.tag === 'style');
+	const scripts = htmlDocument.roots.filter(root => root.tag === 'script');
+
+	for (let i = 0; i < styles.length; i++) {
+		const style = styles[i];
+		if (style.startTagEnd !== undefined && style.endTagStart !== undefined) {
+			const styleText = snapshot.getText(style.startTagEnd, style.endTagStart);
+			yield {
+				id: 'style_' + i,
+				languageId: 'css',
+				snapshot: {
+					getText: (start, end) => styleText.substring(start, end),
+					getLength: () => styleText.length,
+					getChangeRange: () => undefined,
+				},
+				mappings: [{
+					sourceOffsets: [style.startTagEnd],
+					generatedOffsets: [0],
+					lengths: [styleText.length],
+					data: {
+						completion: true,
+						format: true,
+						navigation: true,
+						semantic: true,
+						structure: true,
+						verification: true,
+					},
+				}],
+				embeddedCodes: [],
+			};
+		}
+	}
+
+	for (let i = 0; i < scripts.length; i++) {
+		const script = scripts[i]
+		if (script.startTagEnd !== undefined && script.endTagStart !== undefined) {
+			const text = snapshot.getText(script.startTagEnd, script.endTagStart);
+			const lang = script.attributes?.lang;
+			const isTs = lang === 'ts' || lang === '"ts"' || lang === "'ts'";
+			yield {
+				id: 'script_' + i,
+				languageId: isTs ? 'typescript' : 'javascript',
+				snapshot: {
+					getText: (start, end) => text.substring(start, end),
+					getLength: () => text.length,
+					getChangeRange: () => undefined,
+				},
+				mappings: [{
+					sourceOffsets: [script.startTagEnd],
+					generatedOffsets: [0],
+					lengths: [text.length],
+					data: {
+						completion: true,
+						format: true,
+						navigation: true,
+						semantic: true,
+						structure: true,
+						verification: true,
+					},
+				}],
+				embeddedCodes: [],
+			};
+		}
+	}
 }

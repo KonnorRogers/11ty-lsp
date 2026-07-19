@@ -27,7 +27,7 @@ test("emits a typed `declare const data` header", () => {
 
 test("transcribes a top-level symbol as a member access on `data`", () => {
   const { text, mappings } = buildNunjucksTypeScriptSource("{{ foo }}", { foo: "bar" })
-  assert.match(text, /\(data\.foo\);\n$/)
+  assert.match(text, /\(data\.foo\);\nexport \{\};\n$/)
 
   assert.equal(mappings.length, 1)
   const [mapping] = mappings

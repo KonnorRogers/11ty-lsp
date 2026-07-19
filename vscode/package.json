@@ -42,7 +42,9 @@
         "extensions": [
           ".njk",
           ".nunjucks",
-          ".html"
+          ".html",
+          ".md",
+          ".json"
         ],
         "configuration": "./language-configuration.json"
       }
