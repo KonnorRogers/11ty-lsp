@@ -1,4 +1,5 @@
 import type { CodeInformation, CodeMapping, LanguagePlugin, VirtualCode } from "@volar/language-core"
+import { forEachEmbeddedCode } from "@volar/language-core"
 import type * as nodes from "nunjucks/src/nodes.js"
 import * as ts from "typescript"
 import type { TypeScriptExtraServiceScript } from '@volar/typescript';
@@ -482,7 +483,7 @@ export function createNunjucksLanguagePlugin(
       },
       getExtraServiceScripts(fileName, root) {
 	const scripts: TypeScriptExtraServiceScript[] = [];
-	for (const code of getEmbeddedCodesForHTMLDocument(root, )) {
+	for (const code of forEachEmbeddedCode(root)) {
           if (code.languageId === 'javascript') {
             scripts.push({
               fileName: fileName + '.' + code.id + '.js',
