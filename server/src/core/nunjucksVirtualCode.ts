@@ -3,6 +3,7 @@ import type * as nodes from "nunjucks/src/nodes.js"
 import * as ts from "typescript"
 import type { TypeScriptExtraServiceScript } from '@volar/typescript';
 import { getLanguageService as getHTMLLanguageService } from "vscode-html-languageservice"
+import * as html from 'vscode-html-languageservice';
 import { TextDocument } from "vscode-languageserver-textdocument"
 import type { URI } from "vscode-uri"
 import { getDocumentRegions } from "../embeddedSupport"
@@ -294,7 +295,33 @@ export class NunjucksTsVirtualCode implements VirtualCode {
   id = "nunjucks-data-ts"
   languageId = "typescript"
   mappings: CodeMapping[] = []
-  snapshot: ts.IScriptSnapshot = new StringScriptSnapshot("")
+  document: html.HTMLDocument
+  documentType: "html"
+  embeddedCodes: VirtualCode[]
+
+  constructor(public snapshot: ts.IScriptSnapshot) {
+    this.snapshot = new StringScriptSnapshot("")
+    this.mappings = [{
+      sourceOffsets: [0],
+      generatedOffsets: [0],
+      lengths: [snapshot.getLength()],
+      data: {
+        completion: true,
+        format: true,
+        navigation: true,
+        semantic: true,
+        structure: true,
+        verification: true,
+      },
+    }];
+
+    // TODO: We don't always get handed an HTML document. We need to tolerate MD, JSON, etc.
+    this.document = htmlLanguageService.parseHTMLDocument(
+      html.TextDocument.create('', 'html', 0, snapshot.getText(0, snapshot.getLength()))
+    );
+    this.documentType = "html"
+    this.embeddedCodes = [...getEmbeddedCodesForHTMLDocument(snapshot, this.document)];
+  }
 
   update(documentText: string, data: unknown, extensions?: NunjucksExtension[]) {
     const { text, mappings } = buildNunjucksTypeScriptSource(documentText, data, extensions)
@@ -344,7 +371,6 @@ export class CssRegionVirtualCode implements VirtualCode {
   mappings: CodeMapping[] = []
   snapshot: ts.IScriptSnapshot = new StringScriptSnapshot("")
 
-
   update(documentText: string) {
     const document = TextDocument.create("untitled:nunjucks", "html", 0, documentText)
     const regions = getDocumentRegions(htmlLanguageService, document)
@@ -369,14 +395,16 @@ export class NunjucksRootVirtualCode implements VirtualCode {
   id = "root"
   languageId = "nunjucks"
   mappings: CodeMapping[] = []
-  snapshot: ts.IScriptSnapshot = new StringScriptSnapshot("")
   embeddedCodes: VirtualCode[]
+  snapshot: ts.IScriptSnapshot
 
   private html = new HtmlMirrorVirtualCode()
   private css = new CssRegionVirtualCode()
-  private data = new NunjucksTsVirtualCode()
+  data: NunjucksTsVirtualCode
 
   constructor() {
+    this.snapshot = new StringScriptSnapshot("")
+    this.data = new NunjucksTsVirtualCode(this.snapshot)
     this.embeddedCodes = [this.html, this.css, this.data]
   }
 
@@ -442,7 +470,7 @@ export function createNunjucksLanguagePlugin(
     // in a real `ts.Program` — completion/hover on it would silently come
     // back empty.
     typescript: {
-		  extraFileExtensions: [{ extension: 'nunjucks', isMixedContent: true, scriptKind: ts.ScriptKind.Deferred }],
+      extraFileExtensions: [{ extension: 'nunjucks', isMixedContent: true, scriptKind: ts.ScriptKind.Deferred }],
       getServiceScript(root) {
         const tsCode = root.embeddedCodes?.find((code) => code.id === "nunjucks-data-ts")
         if (!tsCode) return undefined
@@ -452,31 +480,33 @@ export function createNunjucksLanguagePlugin(
           scriptKind: ts.ScriptKind.TS,
         }
       },
-		  getExtraServiceScripts(fileName, root) {
-			  const scripts: TypeScriptExtraServiceScript[] = [];
-			  for (const code of forEachEmbeddedCode(root)) {
-				  if (code.languageId === 'javascript') {
-					  scripts.push({
-						  fileName: fileName + '.' + code.id + '.js',
-						  code,
-						  extension: '.js',
-						  scriptKind: 1 satisfies ts.ScriptKind.JS,
-					  });
-				  }
-				  else if (code.languageId === 'typescript') {
-					  scripts.push({
-						  fileName: fileName + '.' + code.id + '.ts',
-						  code,
-						  extension: '.ts',
-						  scriptKind: 3 satisfies ts.ScriptKind.TS,
-					  });
-				  }
-			  }
-			  return scripts;
-		  },
+      getExtraServiceScripts(fileName, root) {
+	const scripts: TypeScriptExtraServiceScript[] = [];
+	for (const code of getEmbeddedCodesForHTMLDocument(root, )) {
+          if (code.languageId === 'javascript') {
+            scripts.push({
+              fileName: fileName + '.' + code.id + '.js',
+              code,
+              extension: '.js',
+              scriptKind: 1 satisfies ts.ScriptKind.JS,
+            });
+          }
+          else if (code.languageId === 'typescript') {
+            scripts.push({
+              fileName: fileName + '.' + code.id + '.ts',
+              code,
+              extension: '.ts',
+              scriptKind: 3 satisfies ts.ScriptKind.TS,
+            });
+          }
+	}
+	return scripts;
+      },
     },
     createVirtualCode(uri, languageId, snapshot) {
-      if (!isNunjucksDocument(uri, languageId)) return undefined
+      if (!isNunjucksDocument(uri, languageId)) {
+        return undefined
+      }
       const code = new NunjucksRootVirtualCode()
       const text = snapshot.getText(0, snapshot.getLength())
       code.update(text, getData(uri), getExtensions(uri))
@@ -493,7 +523,7 @@ export function createNunjucksLanguagePlugin(
 /**
  * https://github.com/volarjs/starter/blob/master/packages/language-server/src/languagePlugin.ts#L78-L143
  */
-function* getEmbeddedCodes(snapshot: ts.IScriptSnapshot, htmlDocument: html.HTMLDocument): Generator<VirtualCode> {
+function* getEmbeddedCodesForHTMLDocument(snapshot: ts.IScriptSnapshot, htmlDocument: html.HTMLDocument): Generator<VirtualCode> {
 	const styles = htmlDocument.roots.filter(root => root.tag === 'style');
 	const scripts = htmlDocument.roots.filter(root => root.tag === 'script');
 
