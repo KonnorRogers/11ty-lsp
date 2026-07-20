@@ -19,7 +19,7 @@
     "out"
   ],
   "scripts": {
-    "test": "node --import tsx --test ./src/**/*.test.ts",
+    "test": "node --import tsx --test-only --test ./src/**/*.test.ts",
     "update-version": "node ./scripts/update-version.js",
     "version": "npm run update-version && git add src/version.ts",
     "prepublishOnly": "tsc -b"

@@ -45,12 +45,6 @@ declare class _Tokenizer implements LexerOptions {
 declare module 'nunjucks/src/lexer.js' {
   class Tokenizer extends _Tokenizer {}
   export const lex: (src: string, opts?: Partial<LexerOptions>) => Tokenizer
-  export const BLOCK_START = '{%';
-  export const BLOCK_END = '%}';
-  export const VARIABLE_START = '{{';
-  export const VARIABLE_END = '}}';
-  export const COMMENT_START = '{#';
-  export const COMMENT_END = '#}';
 
   export const TOKEN_STRING = 'string';
   export const TOKEN_WHITESPACE = 'whitespace';

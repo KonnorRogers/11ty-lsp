@@ -17,7 +17,7 @@ import { NEW_LINE_WITH_CAPTURE_GROUP } from "../constants";
 const IDENTIFIER_RE = /^(\S|_|-)*$/
 const DATA_VAR = "data"
 // Sentinel we insert after "." to not break parsing.
-const SENTINEL = "__COMPLETION__"
+export const SENTINEL = "__COMPLETION__"
 
 
 interface Segment {
@@ -202,12 +202,16 @@ function collectExpressions(node: unknown, document: TextDocument, bound: Readon
  * {% if page.
  * So we determine the starting tag and replace it.
  */
-function patchDanglingMemberAccess(text: string): string {
+export function patchDanglingMemberAccess(text: string): string {
+  const tokenizer = lexer.lex("foo")
+  const tags = tokenizer.tags
   const matches = {
-    [lexer.BLOCK_START]: lexer.BLOCK_END,
-    [lexer.VARIABLE_START]: lexer.VARIABLE_END,
-    [lexer.COMMENT_START]: lexer.COMMENT_END,
+    [tags.BLOCK_START]: tags.BLOCK_END,
+    [tags.VARIABLE_START]: tags.VARIABLE_END,
+    [tags.COMMENT_START]: tags.COMMENT_END,
   }
+
+  console.log(matches)
 
   const openings = Object.keys(matches) as (keyof typeof matches)[]
 
@@ -232,14 +236,14 @@ function patchDanglingMemberAccess(text: string): string {
     let str = ""
 
     const danglingDotRegExp = /\.($|\s)/
-    for (let j = 0; j < line.length - 1; j++) {
+    for (let j = 0; j < line.length; j++) {
       const char = line[j]
 
-      // @ts-expect-error This is just silly TS.
       // First we check if we have an opening tag IE: "{{", "{%", or "{#", if we do, we start allocating a string to check what is after the opening tag.
       if (openings.includes(start)) {
-        // We have an opening tag, time to look for a closing tag.
+        // We have to walk to the end of the line or until the next closing tag.
         str += char
+
         // more casting because TS is annoying.
         // Check if we end with "}}" or "%}" or "#}"
         if (str.endsWith(matches[start as keyof typeof matches])) {
@@ -248,14 +252,25 @@ function patchDanglingMemberAccess(text: string): string {
             // We have somehting that looks like this:
             // {{ foo. }}
             // So we need to backtrack to the `.` and then insert the sentinel and closing tags.
+            let currentChar = ""
+            let dotOffset = j
+            for (let k = str.length - 1; k > 0; k--) {
+              currentChar = str[k]
+
+              if (currentChar === ".") {
+                dotOffset = start.length + k
+                break
+              }
+            }
+
             const ary = danglingDotOffsets.get(i)
             if (ary) {
               ary.push({
-                offset: j + SENTINEL.length * ary.length
+                offset: dotOffset + SENTINEL.length * ary.length
               })
             } else {
               danglingDotOffsets.set(i, [{
-                offset: j
+                offset: dotOffset
               }])
             }
           }
@@ -274,12 +289,12 @@ function patchDanglingMemberAccess(text: string): string {
             if (ary) {
               ary.push({
                 offset: j + SENTINEL.length * ary.length,
-                endTag: matches[start as keyof typeof matches]
+                endTag: " " + matches[start as keyof typeof matches]
               })
             } else {
               danglingDotOffsets.set(i, [{
                 offset: j,
-                endTag: matches[start as keyof typeof matches]
+                endTag: " " + matches[start as keyof typeof matches]
               }])
             }
           }
@@ -289,6 +304,8 @@ function patchDanglingMemberAccess(text: string): string {
 
       start += char
     }
+
+    console.log({ start, str })
   }
 
   // Now we can mutate the parts
@@ -296,9 +313,15 @@ function patchDanglingMemberAccess(text: string): string {
     ary.forEach((obj) => {
       const str = parts[line]
       if (obj.endTag) {
-        parts[line] = str.slice(line, obj.offset + 1) + SENTINEL + obj.endTag
+        const patchedStr = str.slice(line, obj.offset + 1) + SENTINEL + obj.endTag
+        console.log(patchedStr)
+        parts[line] = patchedStr
       } else {
-        parts[line] = str.slice(line, obj.offset + 1) + SENTINEL + str.slice(obj.offset + 1, str.length)
+        const before = str.slice(line, obj.offset + 1)
+        const after = str.slice(obj.offset + 1, str.length)
+        console.log({ before, after })
+        const patchedStr = before + SENTINEL + after
+        parts[line] = patchedStr
       }
     })
   })

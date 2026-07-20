@@ -347,26 +347,28 @@ export const filters: Record<string, CompletionItem> = {
   },
 }
 
+const lexerTags = lexer.lex("foo").tags
+
 export const generalCompletions = {
   variable: {
-    label: lexer.VARIABLE_START + " " + lexer.VARIABLE_END,
+    label: lexerTags.VARIABLE_START + " " + lexerTags.VARIABLE_END,
     kind: CompletionItemKind.Snippet,
     documentation: 'Variable',
-    insertText: `${lexer.VARIABLE_START} $1 ${lexer.VARIABLE_END}`,
+    insertText: `${lexerTags.VARIABLE_START} $1 ${lexerTags.VARIABLE_END}`,
     insertTextFormat: InsertTextFormat.Snippet
   },
   expression: {
-    label: lexer.BLOCK_START + " " + lexer.BLOCK_END,
+    label: lexerTags.BLOCK_START + " " + lexerTags.BLOCK_END,
     kind: CompletionItemKind.Snippet,
     documentation: 'Expression',
-    insertText: `${lexer.BLOCK_START} $1 ${lexer.BLOCK_END}`,
+    insertText: `${lexerTags.BLOCK_START} $1 ${lexerTags.BLOCK_END}`,
     insertTextFormat: InsertTextFormat.Snippet
   },
   comment: {
-    label: lexer.COMMENT_START + " " + lexer.COMMENT_END,
+    label: lexerTags.COMMENT_START + " " + lexerTags.COMMENT_END,
     kind: CompletionItemKind.Snippet,
     documentation: 'Comment',
-    insertText: `${lexer.COMMENT_START} $1 ${lexer.COMMENT_END}`,
+    insertText: `${lexerTags.COMMENT_START} $1 ${lexerTags.COMMENT_END}`,
     insertTextFormat: InsertTextFormat.Snippet
   }
 }
