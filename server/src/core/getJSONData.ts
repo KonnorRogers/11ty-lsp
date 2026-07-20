@@ -4,6 +4,7 @@ import { getEleventyRuntime } from "./eleventy-runtime"
 import { DataError, DataOrError } from "../constants"
 import { logger } from "../logger"
 import type { NunjucksExtension } from "./nunjucksParser"
+import { createDefinitionCollector, type NunjucksDefinition } from "./nunjucksDefinitions"
 
 function decycle(value: any, ancestors = new WeakSet()): any {
   if (value === null || typeof value !== "object") return value
@@ -32,6 +33,7 @@ const NUNJUCKS_ENGINE_READY_EVENTS = [
 ];
 
 const extensionsByConfigPath = new Map<string, NunjucksExtension[]>()
+const definitionsByConfigPath = new Map<string, NunjucksDefinition[]>()
 
 /**
  * The custom nunjucks tags/shortcodes registered for a given 11ty config,
@@ -41,6 +43,15 @@ const extensionsByConfigPath = new Map<string, NunjucksExtension[]>()
  */
 export function getNunjucksExtensionsForConfig(configPath: string): NunjucksExtension[] | undefined {
   return extensionsByConfigPath.get(configPath)
+}
+
+/**
+ * The project's own shortcodes/tags/filters — names *and* argument lists —
+ * captured during the last build for this config. See `nunjucksDefinitions.ts`
+ * for why this has to happen at registration time.
+ */
+export function getNunjucksDefinitionsForConfig(configPath: string): NunjucksDefinition[] | undefined {
+  return definitionsByConfigPath.get(configPath)
 }
 
 /**
@@ -99,8 +110,17 @@ export async function getJSONData({ configPath, output, invalidate = [] }:
     config: async (c: any) => {
       c.dataFilterSelectors.add("*");
 
-      const captureNunjucksEnvironment = ({ environment }: { environment: { extensionsList?: NunjucksExtension[] } }) => {
+      // Must be installed before the project's own config function runs, so
+      // its registrations pass through our wrappers.
+      const collector = createDefinitionCollector()
+      collector.install(c)
+
+      const captureNunjucksEnvironment = ({ environment }: { environment: { extensionsList?: NunjucksExtension[]; filters?: Record<string, unknown> } }) => {
         extensionsByConfigPath.set(configPath, environment.extensionsList ?? [])
+        // Nunjucks' own filters (`upper`, `join`, ...) are never registered
+        // through eleventyConfig, so they only show up on the environment.
+        collector.addBuiltinFilters(Object.keys(environment.filters ?? {}))
+        definitionsByConfigPath.set(configPath, collector.definitions())
       }
       for (const ev of NUNJUCKS_ENGINE_READY_EVENTS) {
         c.on(ev, captureNunjucksEnvironment)

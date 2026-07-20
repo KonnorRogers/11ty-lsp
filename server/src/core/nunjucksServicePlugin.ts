@@ -1,5 +1,5 @@
 import type { LanguageServiceContext, LanguageServicePlugin, LanguageServicePluginInstance } from "@volar/language-service"
-import { DiagnosticSeverity, MarkupKind } from "vscode-languageserver"
+import { CompletionItemKind, DiagnosticSeverity, InsertTextFormat, MarkupKind } from "vscode-languageserver"
 import type { TextDocument } from "vscode-languageserver-textdocument"
 import { URI } from "vscode-uri"
 import { DataOrError } from "../constants"
@@ -10,6 +10,7 @@ import { getContext } from "./getContext"
 import { NunjucksExtension, NunjucksParser } from "./nunjucksParser"
 import { NunjucksProvider } from "./nunjucksProvider"
 import { NunjucksValidator } from "./nunjucksValidator"
+import { completionSlotAt, snippetFor, type NunjucksDefinition } from "./nunjucksDefinitions"
 
 /**
  * Volar wraps *every* virtual code — including our own root "nunjucks"
@@ -29,6 +30,8 @@ export interface NunjucksServicePluginHost {
   getData(uri: string): DataOrError | undefined | null
   /** The project's real registered nunjucks tags/shortcodes for the file at `uri`, if known. */
   getExtensions(uri: string): NunjucksExtension[] | undefined
+  /** The project's shortcodes/tags/filters with argument lists, if a build has run. */
+  getDefinitions(uri: string): NunjucksDefinition[] | undefined
 }
 
 /**
@@ -47,6 +50,11 @@ export function createNunjucksServicePlugin(host: NunjucksServicePluginHost): La
     name: "nunjucks",
     capabilities: {
       hoverProvider: true,
+      completionProvider: {
+        // `%` fires on `{%`, `|` on a filter pipe, and space covers
+        // `{% ` / `| ` where the name slot opens up.
+        triggerCharacters: ["%", "|", " "],
+      },
       diagnosticProvider: {
         interFileDependencies: true,
         workspaceDiagnostics: false,
@@ -54,6 +62,54 @@ export function createNunjucksServicePlugin(host: NunjucksServicePluginHost): La
     },
     create(context: LanguageServiceContext): LanguageServicePluginInstance {
       return {
+        async provideCompletionItems(document: TextDocument, position) {
+          // Shortcodes and filters only exist in the template language
+          // itself, so this is the root document's business — the embedded
+          // html/css/ts codes have nothing to say here.
+          if (document.languageId !== "nunjucks") return
+
+          const sourceUri = resolveSourceUri(context, document.uri)
+          const settings = await host.getSettings(sourceUri)
+          if (!settings.enabledFeatures?.completion) return
+
+          const definitions = host.getDefinitions(sourceUri)
+          if (!definitions?.length) return
+
+          const text = document.getText()
+          const slot = completionSlotAt(text, document.offsetAt(position))
+          if (!slot) return
+
+          const wanted =
+            slot.slot === "filter"
+              ? definitions.filter((d) => d.kind === "filter")
+              : definitions.filter((d) => d.kind !== "filter")
+
+          return {
+            isIncomplete: false,
+            items: wanted.map((definition) => {
+              const signature = definition.params.length ? `(${definition.params.join(", ")})` : ""
+              const detail =
+                definition.kind === "pairedShortcode" ? "paired shortcode"
+                : definition.kind === "tag" ? "nunjucks tag"
+                : definition.kind
+
+              return {
+                label: definition.name,
+                kind: definition.kind === "filter" ? CompletionItemKind.Function : CompletionItemKind.Snippet,
+                detail: `${signature} — ${detail}${definition.isAsync ? " (async)" : ""}`,
+                documentation: {
+                  kind: MarkupKind.PlainText,
+                  value: `${definition.name}(${definition.params.join(", ")})\n\nRegistered by this project's Eleventy config.`,
+                },
+                // Filters take their input from the pipe, so completing a
+                // call signature there would be wrong.
+                insertText: slot.slot === "filter" ? definition.name : snippetFor(definition, slot.closed),
+                insertTextFormat: slot.slot === "filter" ? InsertTextFormat.PlainText : InsertTextFormat.Snippet,
+              }
+            }),
+          }
+        },
+
         async provideHover(document: TextDocument, position) {
           // Volar invokes every registered plugin against the root document
           // *and* every embedded one (html/css/ts) — this plugin only makes

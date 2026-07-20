@@ -169,6 +169,12 @@ const CASES: Array<{ name: string; insert: string; caretBack?: number; expect: s
   // Nested and non-eleventy data.
   { name: "dangling dot on front-matter data", insert: "\n    {{ obj.d.", expect: ["e"] },
   { name: "dangling dot on page", insert: "\n    {{ page.", expect: ["url", "inputPath"] },
+  // Project vocabulary read out of the user's eleventy config — see
+  // test-files/eleventy-4/eleventy.config.js for the registrations.
+  { name: "block tag slot offers shortcodes", insert: "\n    {% ", expect: ["shout", "image", "callout", "banner"] },
+  { name: "partial tag name still offers shortcodes", insert: "\n    {% ca", expect: ["callout"] },
+  { name: "filter slot offers custom filters", insert: "\n    {{ foo | ", expect: ["titlecase", "slugify", "upper"] },
+  { name: "partial filter name offers filters, not data", insert: "\n    {{ foo | title", expect: ["titlecase"] },
   // Well-formed input must keep working.
   { name: "complete member access", insert: "\n    {{ eleventy.ver }}", caretBack: 3, expect: ["version"] },
   { name: "top-level symbol", insert: "\n    {{ foo }}", caretBack: 5, expect: ["foo", "bar", "items"] },

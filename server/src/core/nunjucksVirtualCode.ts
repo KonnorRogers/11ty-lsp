@@ -268,6 +268,17 @@ function collectExpressions(node: unknown, document: TextDocument, patched: Patc
     // and `key` in `obj[key]`).
   }
 
+  // `{{ foo | title }}` parses the filter name as a `Symbol`, but it names a
+  // filter, not a property of `data` — transcribing it would both offer
+  // nonsense completions (`data.title`) and let the TS service claim
+  // completion requests in filter position. Only the arguments are real
+  // data expressions.
+  if (n.typename === "Filter" || n.typename === "FilterAsync") {
+    const filterNode = n as unknown as Record<"args", nodes.AnyNode | null>
+    collectExpressions(filterNode.args, document, patched, bound, out)
+    return
+  }
+
   if (n.typename === "For") {
     // `For`'s fields aren't declared as real properties in the local
     // nunjucks type overrides (only `.fields` is), so read dynamically.

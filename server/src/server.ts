@@ -26,7 +26,7 @@ import {
 import { NunjucksSettings } from "./settings/nunjucksSettings";
 import { createNunjucksLanguagePlugin } from "./core/nunjucksVirtualCode";
 import { createNunjucksServicePlugin } from "./core/nunjucksServicePlugin";
-import { getJSONData, getNunjucksExtensionsForConfig } from "./core/getJSONData";
+import { getJSONData, getNunjucksDefinitionsForConfig, getNunjucksExtensionsForConfig } from "./core/getJSONData";
 import { DataOrError } from "./constants";
 // import { version } from "./version";
 
@@ -99,6 +99,15 @@ function getDataOrErrorForFile(documentUri: string): DataOrError | undefined | n
 function getExtensionsForFile(documentUri: string) {
   const config = findConfigForDocument(documentUri);
   return config ? getNunjucksExtensionsForConfig(config) : undefined;
+}
+
+/**
+ * The project's own shortcodes/tags/filters, with argument lists, for
+ * completion. Captured during the same build that produces the data above.
+ */
+function getDefinitionsForFile(documentUri: string) {
+  const config = findConfigForDocument(documentUri);
+  return config ? getNunjucksDefinitionsForConfig(config) : undefined;
 }
 
 function tmpDirFor(configPath: string) {
@@ -275,6 +284,7 @@ connection.onInitialize((params) => {
         // getDataOrErrorForFile's doc comment.
         getData: (uri) => getDataOrErrorForFile(uri),
         getExtensions: (uri) => getExtensionsForFile(uri),
+        getDefinitions: (uri) => getDefinitionsForFile(uri),
       }),
     ],
   );
