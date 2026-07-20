@@ -19,6 +19,12 @@ const DATA_VAR = "data"
 // Sentinel we insert after "." to not break parsing.
 export const SENTINEL = "__COMPLETION__"
 
+interface Tok {
+  type: string
+  value: string
+  start: number  // absolute offset in source
+  end: number    // absolute offset just past the token
+}
 
 interface Segment {
   /** offset into the original Nunjucks document */
@@ -37,6 +43,99 @@ interface Transcribed {
   segments: Segment[]
 }
 
+export interface Insertion {
+  /** offset in the ORIGINAL text where synthetic text was inserted */
+  sourceOffset: number
+  /** length of the inserted text (must contain no newlines) */
+  length: number
+}
+
+export interface PatchedText {
+  text: string
+  /** sorted ascending by sourceOffset */
+  insertions: Insertion[]
+}
+
+function applyInsertions(
+  original: string,
+  edits: Array<{ offset: number; text: string }>
+): PatchedText {
+  const sorted = [...edits].sort((a, b) => a.offset - b.offset)
+  const insertions: Insertion[] = []
+  let out = ""
+  let last = 0
+  for (const e of sorted) {
+    out += original.slice(last, e.offset) + e.text
+    insertions.push({ sourceOffset: e.offset, length: e.text.length })
+    last = e.offset
+  }
+  return { text: out + original.slice(last), insertions }
+}
+
+/** patched offset -> original offset; null if the offset is inside synthetic text */
+export function toSourceOffset(p: PatchedText, generatedOffset: number): number | null {
+  let delta = 0
+  for (const ins of p.insertions) {
+    const genStart = ins.sourceOffset + delta
+    if (generatedOffset < genStart) break
+    if (generatedOffset < genStart + ins.length) return null
+    delta += ins.length
+  }
+  return generatedOffset - delta
+}
+
+/**
+ * Same, but offsets inside synthetic text collapse onto the point the text
+ * was inserted at rather than returning null.
+ *
+ * This is what mapping wants. Nunjucks parses the *patched* text, so every
+ * AST node's line/col is in patched coordinates, but `CodeMapping`s have to
+ * be expressed against the original document or they point at the wrong
+ * characters — or, for a sentinel at EOF, off the end of the document
+ * entirely. Collapsing falls out usefully: `{{ page.` transcribes to a
+ * segment spanning `.__COMPLETION__`, whose end collapses back onto the
+ * real `.`, leaving a 1-char source span over the dot the user typed. TS
+ * still sees the full `.__COMPLETION__` on the generated side, so
+ * completion just after the dot lists the real members of `page`.
+ */
+export function toSourceOffsetClamped(p: PatchedText, generatedOffset: number): number {
+  let delta = 0
+  for (const ins of p.insertions) {
+    const genStart = ins.sourceOffset + delta
+    if (generatedOffset < genStart) break
+    if (generatedOffset < genStart + ins.length) return ins.sourceOffset
+    delta += ins.length
+  }
+  return generatedOffset - delta
+}
+
+interface Lexed {
+  tokens: Tok[]
+  tags: _Tokenizer["tags"]
+  /** lexer threw partway — everything after the last token is unlexed */
+  truncated: boolean
+}
+
+function tokenize(src: string, opts?: object): Lexed {
+  const tokenizer = lexer.lex(src, opts)
+  const tokens: Tok[] = []
+  let truncated = false
+  try {
+    while (true) {
+      const start = tokenizer.index
+      const token = tokenizer.nextToken()
+      if (!token) {
+        break
+      }
+      tokens.push({ type: token.type, value: token.value, start, end: tokenizer.index })
+    }
+  } catch {
+    // Unterminated string or comment, stray char. Keep what we got.
+    truncated = true
+  }
+  return { tokens, tags: tokenizer.tags, truncated }
+}
+
 /**
  * Transcribes a `Symbol` or `LookupVal` chain (`{{ obj.a.b }}`) into a TS
  * member-access expression on the synthesized `data` const, producing one
@@ -44,15 +143,19 @@ interface Transcribed {
  * segment maps back to the exact source range for that piece — not the
  * whole chain at once.
  */
-function transcribeChain(node: nodes.AnyNode, document: TextDocument): Transcribed | null {
+function transcribeChain(node: nodes.AnyNode, document: TextDocument, patched: PatchedText): Transcribed | null {
   if (node.typename === "Symbol") {
-    const sourceOffset = document.offsetAt({ line: node.lineno, character: node.colno })
+    const start = document.offsetAt({ line: node.lineno, character: node.colno })
+    const sourceOffset = toSourceOffsetClamped(patched, start)
     const prefix = `${DATA_VAR}.`
     return {
       text: prefix + node.value,
       segments: [{
         sourceOffset,
-        sourceLength: node.value.length,
+        // A wholly synthetic symbol (the sentinel in `{{ }}`) collapses to a
+        // zero-length source range at the point we inserted it, which is
+        // exactly where the caret sits.
+        sourceLength: toSourceOffsetClamped(patched, start + node.value.length) - sourceOffset,
         generatedOffset: prefix.length,
         generatedLength: node.value.length,
       }],
@@ -60,7 +163,7 @@ function transcribeChain(node: nodes.AnyNode, document: TextDocument): Transcrib
   }
 
   if (node.typename === "LookupVal") {
-    const target = transcribeChain(node.target as nodes.AnyNode, document)
+    const target = transcribeChain(node.target as nodes.AnyNode, document, patched)
     if (!target) {
       return null
     }
@@ -84,14 +187,18 @@ function transcribeChain(node: nodes.AnyNode, document: TextDocument): Transcrib
     // together they bound the full source span for this one segment.
     const dotOffset = document.offsetAt({ line: node.lineno, character: node.colno })
     const keyOffset = document.offsetAt({ line: keyNode.lineno, character: keyNode.colno })
-    const sourceLength = (keyOffset - dotOffset) + key.length
+    // Both ends go through the mapper: for a real key this is unchanged,
+    // and for a sentinel key the end collapses back onto the dot, leaving a
+    // 1-char source span over the `.` the user actually typed.
+    const sourceOffset = toSourceOffsetClamped(patched, dotOffset)
+    const sourceLength = toSourceOffsetClamped(patched, keyOffset + key.length) - sourceOffset
 
     return {
       text: target.text + memberText,
       segments: [
         ...target.segments,
         {
-          sourceOffset: dotOffset,
+          sourceOffset,
           sourceLength,
           generatedOffset: target.text.length,
           generatedLength: memberText.length,
@@ -132,12 +239,12 @@ function rootSymbolName(node: nodes.AnyNode): string | null {
  * Symbols bound by an enclosing `{% for %}` are skipped rather than
  * mistyped: loop-variable typing is deferred (see plan).
  */
-function collectExpressions(node: unknown, document: TextDocument, bound: ReadonlySet<string>, out: Transcribed[]): void {
+function collectExpressions(node: unknown, document: TextDocument, patched: PatchedText, bound: ReadonlySet<string>, out: Transcribed[]): void {
   if (node == null || typeof node !== "object") return
 
   if (Array.isArray(node)) {
     for (const item of node) {
-      collectExpressions(item, document, bound, out)
+      collectExpressions(item, document, patched, bound, out)
     }
     return
   }
@@ -147,7 +254,7 @@ function collectExpressions(node: unknown, document: TextDocument, bound: Readon
   if (n.typename === "Symbol" || n.typename === "LookupVal") {
     const rootName = rootSymbolName(n)
     if (rootName != null && !bound.has(rootName)) {
-      const transcribed = transcribeChain(n, document)
+      const transcribed = transcribeChain(n, document, patched)
       if (transcribed) {
         out.push(transcribed)
         // Fully consumed as one chain — don't also descend into
@@ -165,202 +272,34 @@ function collectExpressions(node: unknown, document: TextDocument, bound: Readon
     // `For`'s fields aren't declared as real properties in the local
     // nunjucks type overrides (only `.fields` is), so read dynamically.
     const forNode = n as unknown as Record<"arr" | "name" | "body" | "else_", nodes.AnyNode | null>
-    collectExpressions(forNode.arr, document, bound, out)
+    collectExpressions(forNode.arr, document, patched, bound, out)
     const nested = new Set(bound)
     for (const name of forLoopBoundNames(forNode.name as nodes.AnyNode)) nested.add(name)
-    collectExpressions(forNode.body, document, nested, out)
+    collectExpressions(forNode.body, document, patched, nested, out)
     if (forNode.else_) {
-      collectExpressions(forNode.else_, document, bound, out)
+      collectExpressions(forNode.else_, document, patched, bound, out)
     }
     return
   }
 
   for (const field of (n as unknown as { fields?: string[] }).fields ?? []) {
-    collectExpressions((n as any)[field], document, bound, out)
+    collectExpressions((n as any)[field], document, patched, bound, out)
   }
 }
 
 /**
- * Nunjucks's parser throws on a dangling `.` with nothing after it, and
- * gives up on the *rest of the document* too (see `safeParseAsRoot`) — so
- * without this, typing `{{ page. }}` loses completions not just for that
- * expression but for everything after it. Substituting the first
- * whitespace character after such a dot with a placeholder identifier
- * makes it parse as a (throwaway) property access instead. This is a
- * same-length substitution, so every other node's position in the document
- * is completely unaffected, and TS completion at that position — which
- * still maps back to right after the real dot — lists real members of
- * whatever came before it regardless of the placeholder's name.
+ * Nunjucks's parser throws on a dangling `.` with nothing after it, on an
+ * empty `{{ }}`, and on an unclosed tag — and gives up on the *rest of the
+ * document* too (see `safeParseAsRoot`). So without this, typing `{{ page.`
+ * loses completions not just for that expression but for everything after
+ * it. Inserting a placeholder identifier (and, where needed, a synthetic
+ * closer) makes it parse as a throwaway property access instead.
  *
- * Only handles same-line whitespace (`[ \t]+`, not `\n`) deliberately: were
- * the run to include a newline, swapping it out would change the line
- * count from that point on and corrupt every subsequent position instead.
- * `{{ page.\n}}` (dangling dot, closing tag on the next line) is left
- * unpatched rather than risking that.
- * We also want to this to work when a user has done something like:
- * {{ page.
- * {% if page.
- * So we determine the starting tag and replace it.
+ * The insertions change offsets, so the result carries the list of edits
+ * with it — see `toSourceOffsetClamped` for mapping back to the original.
  */
-export function patchDanglingMemberAccess(text: string): string {
-  const tokenizer = lexer.lex("foo")
-  const tags = tokenizer.tags
-  const matches = {
-    [tags.BLOCK_START]: tags.BLOCK_END,
-    [tags.VARIABLE_START]: tags.VARIABLE_END,
-    [tags.COMMENT_START]: tags.COMMENT_END,
-  }
-
-  console.log(matches)
-
-  const openings = Object.keys(matches) as (keyof typeof matches)[]
-
-  const parts = text.split(NEW_LINE_WITH_CAPTURE_GROUP)
-
-  /**
-   * Keep a map of danglingDotOffsets, because mutating in place may mess with our loop. Instead, we'll track them as an object, store the line + offset position, and then insert the SENTINEL value.
-   * If we have multiple on the same line, we need to offset each one in the array by the length of the SENTINEL
-   */
-  type offsetArray = Array<{
-    offset: number,
-    beforeSentinel?: string
-    afterSentinel?: string
-  }>
-  const danglingDotOffsets = new Map<number, offsetArray>()
-
-  for (let i = 0; i < parts.length; i += 2) {
-    const line = parts[i]
-
-    // First need to grab the starting tokens, and then we parse until the next END token. It doesn't *have* to have whitespace after. We could use a string scanner here, but this is totally fine.
-    // This is a very very very dumb attempt to find the opening tag and append it to make it valid to get completions.
-    let start = ""
-    let str = ""
-
-    const danglingDotRegExp = /\.($|\s)/
-    for (let j = 0; j < line.length; j++) {
-      const char = line[j]
-
-      // First we check if we have an opening tag IE: "{{", "{%", or "{#", if we do, we start allocating a string to check what is after the opening tag.
-      if (openings.includes(start)) {
-        // We have to walk to the end of the line or until the next closing tag.
-        str += char
-
-        // more casting because TS is annoying.
-        // Check if we end with "}}" or "%}" or "#}"
-        if (str.endsWith(matches[start as keyof typeof matches])) {
-          // Check if we have a "." prior to the closing tag.
-          if (danglingDotRegExp.test(str)) {
-            // We have somehting that looks like this:
-            // {{ foo. }}
-            // So we need to backtrack to the `.` and then insert the sentinel and closing tags.
-            let currentChar = ""
-            let dotOffset = j
-            for (let k = str.length - 1; k > 0; k--) {
-              currentChar = str[k]
-
-              if (currentChar === ".") {
-                dotOffset = start.length + k
-                break
-              }
-            }
-
-            const ary = danglingDotOffsets.get(i)
-            if (ary) {
-              ary.push({
-                offset: dotOffset + SENTINEL.length * ary.length
-              })
-            } else {
-              danglingDotOffsets.set(i, [{
-                offset: dotOffset
-              }])
-            }
-          }
-
-          // Reset everything because we either have a dangling member access, or we don't. If we do, we add it to an array of offsets to be modified later.
-          start = ""
-          str = ""
-        } else {
-          // We're at the end of the line, we have an opening tag, but no closing tag, and we have a `.` with whitespace after it or nothing.
-          // We have roughly the following:
-          // {{ foo.
-          // and we need to add the ending pair to get a proper parse.
-          if (j === line.length - 1 && danglingDotRegExp.test(str)) {
-            // We know the opening tag, so we force an endTag after the dangling dot.
-            const ary = danglingDotOffsets.get(i)
-            if (ary) {
-              ary.push({
-                offset: j + SENTINEL.length * ary.length,
-                afterSentinel: " " + matches[start as keyof typeof matches]
-              })
-            } else {
-              danglingDotOffsets.set(i, [{
-                offset: j,
-                afterSentinel: " " + matches[start as keyof typeof matches]
-              }])
-            }
-            continue
-          }
-
-          // If we trim whitespace and theres nothing, insert a SENTINEL.
-          if (j === line.length - 1 && str.trim() === "") {
-            // We know the opening tag, so we force an endTag after the dangling dot.
-            const ary = danglingDotOffsets.get(i)
-            if (ary) {
-              ary.push({
-                offset: j + SENTINEL.length * ary.length,
-                afterSentinel: " " + matches[start as keyof typeof matches]
-              })
-            } else {
-              danglingDotOffsets.set(i, [{
-                offset: j,
-                afterSentinel: " " + matches[start as keyof typeof matches]
-              }])
-            }
-          }
-        }
-        continue
-      }
-
-      start += char
-
-      // This is a one time test for the case of "{{" and nothing afterwards.
-      if (openings.includes(start)) {
-          // If we trim whitespace and theres nothing, insert a SENTINEL.
-          if (j === line.length - 1 && str.trim() === "") {
-            // We know the opening tag, so we force an endTag after the dangling dot.
-            const ary = danglingDotOffsets.get(i)
-            if (ary) {
-              ary.push({
-                offset: j + SENTINEL.length * ary.length,
-                beforeSentinel: " ",
-                afterSentinel: " " + matches[start as keyof typeof matches]
-              })
-            } else {
-              danglingDotOffsets.set(i, [{
-                offset: j,
-                beforeSentinel: " ",
-                afterSentinel: " " + matches[start as keyof typeof matches]
-              }])
-            }
-          }
-      }
-    }
-  }
-
-  // Now we can mutate the parts
-  ;[...danglingDotOffsets.entries()].forEach(([line, ary]) => {
-    ary.forEach((obj) => {
-      const str = parts[line]
-      const before = str.slice(line, obj.offset + 1)
-      const after = str.slice(obj.offset + 1, str.length)
-      const beforeSentinel = obj.beforeSentinel || ""
-      const afterSentinel = obj.afterSentinel || ""
-      const patchedStr = before + beforeSentinel + SENTINEL + afterSentinel + after
-      parts[line] = patchedStr
-    })
-  })
-
-  return parts.join("")
+export function patchDanglingMemberAccess(text: string, opts?: object): PatchedText {
+  return applyInsertions(text, computeDanglingEdits(text, opts))
 }
 
 export function buildNunjucksTypeScriptSource(
@@ -368,18 +307,21 @@ export function buildNunjucksTypeScriptSource(
   data: unknown,
   extensions?: NunjucksExtension[]
 ): { text: string; mappings: CodeMapping[] } {
-  // Positions are computed against the *original* text — the patch below
-  // never changes length or line breaks, so they stay valid either way.
-  const document = TextDocument.create("untitled:nunjucks", "njk", 0, documentText)
+  // The AST comes from the *patched* text, so node line/col are patched
+  // coordinates and the document we resolve them against has to be the
+  // patched one too. `transcribeChain` maps the resulting offsets back to
+  // the original document via `toSourceOffsetClamped`.
+  const patched = patchDanglingMemberAccess(documentText)
+  const document = TextDocument.create("untitled:nunjucks", "njk", 0, patched.text)
   const parser = new NunjucksParser({})
-  const { ast } = parser.parseContent(patchDanglingMemberAccess(documentText), extensions)
+  const { ast } = parser.parseContent(patched.text, extensions)
 
   const dataType = data === undefined ? "unknown" : jsonValueToTsType(data)
   let generated = `declare const ${DATA_VAR}: ${dataType};\n`
   const mappings: CodeMapping[] = []
 
   const expressions: Transcribed[] = []
-  collectExpressions(ast, document, new Set(), expressions)
+  collectExpressions(ast, document, patched, new Set(), expressions)
 
   for (const expr of expressions) {
     const statementStart = generated.length
@@ -387,9 +329,44 @@ export function buildNunjucksTypeScriptSource(
     const exprOffsetInStatement = 1 // leading "("
 
     for (const seg of expr.segments) {
+      const generatedOffset = statementStart + exprOffsetInStatement + seg.generatedOffset
+
+      if (seg.sourceLength === 0) {
+        // A wholly synthetic symbol — the sentinel standing in for an empty
+        // `{{ }}`. It collapses to a zero-length source range at the point we
+        // inserted it, but the caret can be anywhere in the surrounding
+        // whitespace ("{{ | }}"), which a single zero-length mapping would
+        // miss. Anchor one at every offset in that run instead; each lands
+        // exactly at the sentinel's start in the generated text — i.e. just
+        // after `data.`, where TS lists the top-level keys.
+        let start = seg.sourceOffset
+        while (start > 0 && (documentText[start - 1] === " " || documentText[start - 1] === "\t")) start--
+        let end = seg.sourceOffset
+        while (end < documentText.length && (documentText[end] === " " || documentText[end] === "\t")) end++
+
+        const offsets: number[] = []
+        for (let offset = start; offset <= end; offset++) offsets.push(offset)
+
+        mappings.push({
+          sourceOffsets: offsets,
+          generatedOffsets: offsets.map(() => generatedOffset),
+          lengths: offsets.map(() => 0),
+          generatedLengths: offsets.map(() => seg.generatedLength),
+          data: {
+            completion: true,
+            semantic: true,
+            navigation: true,
+            verification: false,
+            structure: false,
+            format: false,
+          } satisfies CodeInformation,
+        })
+        continue
+      }
+
       mappings.push({
         sourceOffsets: [seg.sourceOffset],
-        generatedOffsets: [statementStart + exprOffsetInStatement + seg.generatedOffset],
+        generatedOffsets: [generatedOffset],
         lengths: [seg.sourceLength],
         generatedLengths: [seg.generatedLength],
         data: {
@@ -757,35 +734,165 @@ function* getEmbeddedCodesForHTMLDocument(snapshot: ts.IScriptSnapshot, htmlDocu
   }
 }
 
+const isWhiteSpace = (t: Tok) => t.type === lexer.TOKEN_WHITESPACE
+const isKey = (t: Tok) =>
+  t.type === lexer.TOKEN_SYMBOL || t.type === lexer.TOKEN_INT
+
+interface Edit { offset: number; text: string }
+
 /**
- * This is for `{{ foo. }}`
+ * A tag is only ever considered to close on its *own line*. The lexer keeps
+ * consuming in expression mode after an unclosed `{{`, so given
+ *
+ *     {{ eleventy.
+ *     {{ obj.a }}
+ *
+ * it happily reports the second line's `}}` as the first tag's closer — and
+ * the patched text would then nest `{{` inside an expression and fail to
+ * parse, losing completions for the whole document. When that happens we
+ * close the tag synthetically at its own line end and resume scanning from
+ * the next line, so the following tags get looked at on their own terms.
  */
-function insertSentinelAfterDot (str: string) {
-  let finalString = str
-  // We walk backwards to find the first instance of a "."
-  for (let i = str.length - 1; i >= 0; i--) {
-    const char = str[i]
-    if (char === ".") {
-      finalString = str.slice(0, i + 2) + SENTINEL + str.slice(i + 1, str.length)
-      break
-    }
+export function computeDanglingEdits(src: string, opts?: object): Edit[] {
+  const edits: Edit[] = []
+  let from = 0
+  while (from < src.length) {
+    const resumeAt = scanFrom(src, from, edits, opts)
+    if (resumeAt === undefined || resumeAt <= from) break
+    from = resumeAt
   }
-  return finalString
+  return edits
 }
 
-
 /**
- * This is for `{{ foo.`
+ * Scans one run of `src` starting at `base`, appending edits. Returns the
+ * offset to resume scanning from after a synthetically-closed tag, or
+ * `undefined` once the rest of the input is consumed.
  */
-function insertSentinelAfterDotAndClosingTag (str: string, closingTag: string) {
-  let finalString = str
-  // We walk backwards to find the first instance of a "."
-  for (let i = str.length - 1; i >= 0; i--) {
-    const char = str[i]
-    if (char === ".") {
-      finalString = str.slice(0, i + 2) + SENTINEL + closingTag
-      break
+function scanFrom(src: string, base: number, edits: Edit[], opts?: object): number | undefined {
+  const { tokens, tags } = tokenize(src.slice(base), opts)
+  // `tokenize` works on the slice, so shift every offset back into `src`.
+  for (const t of tokens) {
+    t.start += base
+    t.end += base
+  }
+
+  // Only pad when the source doesn't already supply whitespace, so we never
+  // fuse with a neighbouring token (notably a `-}}` whitespace-control
+  // closer) but also never introduce a gratuitous double space.
+  const padBefore = (at: number) => (at > 0 && /\s/.test(src[at - 1]) ? "" : " ")
+  const padAfter = (at: number) => (at < src.length && /\s/.test(src[at]) ? "" : " ")
+
+  let openTok: Tok | null = null   // the {{ or {% that started the current tag
+  let tagName: string | null = null // first symbol after {%
+  let contentCount = 0
+  // Content that appeared before the end of the opening tag's own line. An
+  // unclosed `{{` makes the lexer keep consuming in expression mode, so the
+  // HTML that follows (`</body>`, ...) arrives as content tokens — counting
+  // those would hide the fact that the user's tag is actually empty.
+  let contentOnOpenLine = 0
+  // Where in `edits` the current tag's edits begin, so a synthetic closer
+  // can discard anything we queued past it.
+  let editsAtTagStart = 0
+
+  const nextMeaningful = (i: number): Tok | undefined => {
+    for (let j = i + 1; j < tokens.length; j++) if (!isWhiteSpace(tokens[j])) return tokens[j]
+    return undefined
+  }
+
+  // An unclosed tag gets its synthetic closer at the end of *its own line*,
+  // not at EOF. Appending at EOF would pull everything after the caret
+  // (`</body></html>`, the rest of the template) inside the expression, and
+  // nunjucks would fail to parse the whole document — losing every
+  // completion rather than just this one.
+  const endOfLine = (offset: number) => {
+    const nl = src.indexOf("\n", offset)
+    return nl === -1 ? src.length : nl
+  }
+
+  const finish = (endTok: Tok | undefined) => {
+    if (!openTok) return
+    const isVar = openTok.type === lexer.TOKEN_VARIABLE_START
+    if (!endTok) {
+      // Everything past the synthetic closer is not really inside this tag,
+      // so drop sentinels we queued for it (e.g. a `.` in HTML below).
+      const closerAt = endOfLine(openTok.start)
+      edits.length = editsAtTagStart + edits.slice(editsAtTagStart).filter((e) => e.offset <= closerAt).length
+    }
+    const content = endTok ? contentCount : contentOnOpenLine
+    // `{{ }}` or a bare `{{` at EOF: parser dies on an empty expression.
+    if (content === 0 && isVar) {
+      const at = endTok ? endTok.start : endOfLine(openTok.start)
+      edits.push({
+        offset: at,
+        text: endTok
+          ? `${padBefore(at)}${SENTINEL}${padAfter(at)}`
+          : `${padBefore(at)}${SENTINEL} ${tags.VARIABLE_END}`,
+      })
+    } else if (!endTok) {
+      const at = endOfLine(openTok.start)
+      edits.push({ offset: at, text: `${padBefore(at)}${closerFor(isVar, tagName, tags)}` })
+    }
+    openTok = null; tagName = null; contentCount = 0; contentOnOpenLine = 0
+  }
+
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]
+
+    if (t.type === lexer.TOKEN_VARIABLE_START || t.type === lexer.TOKEN_BLOCK_START) {
+      finish(undefined)          // previous tag never closed
+      openTok = t
+      editsAtTagStart = edits.length
+      continue
+    }
+    if (t.type === lexer.TOKEN_VARIABLE_END || t.type === lexer.TOKEN_BLOCK_END) {
+      if (openTok && t.start > endOfLine(openTok.start)) {
+        // Closer belongs to a later line — this tag never really closed.
+        const resumeAt = endOfLine(openTok.start) + 1
+        finish(undefined)
+        return resumeAt
+      }
+      finish(t)
+      continue
+    }
+    if (!openTok || isWhiteSpace(t)) {
+      continue
+    }
+
+    if (contentCount === 0 && openTok.type === lexer.TOKEN_BLOCK_START) {
+      tagName = t.value
+    }
+    contentCount++
+    if (t.start < endOfLine(openTok.start)) {
+      contentOnOpenLine++
+    }
+
+    if (t.type === lexer.TOKEN_OPERATOR && t.value === ".") {
+      const next = nextMeaningful(i)
+      if (!next || !isKey(next)) {
+        edits.push({ offset: t.end, text: `${SENTINEL}${padAfter(t.end)}` })
+      }
     }
   }
-  return finalString
+  finish(undefined)
+  return undefined
+}
+
+function closerFor(isVar: boolean, tagName: string | null, tags: LexerOptions["tags"]) {
+  if (isVar) {
+    return tags.VARIABLE_END
+  }
+
+
+  // TODO: We should actually compute these off of custom extensions.
+  const block_closers: Record<string, string> = {
+    if: "endif", for: "endfor", block: "endblock", macro: "endmacro",
+    filter: "endfilter", call: "endcall", raw: "endraw",
+    verbatim: "endverbatim", asyncEach: "endeach", asyncAll: "endall",
+  }
+
+  const end = tagName && block_closers[tagName]
+  return end
+    ? `${tags.BLOCK_END} ${tags.BLOCK_START} ${end} ${tags.BLOCK_END}`
+    : tags.BLOCK_END
 }

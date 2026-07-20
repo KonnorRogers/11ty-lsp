@@ -169,7 +169,7 @@ test("dangling dot doesn't lose expressions later in the document", {only: true}
   // A hard nunjucks parse error normally discards everything parsed after
   // it (see safeParseAsRoot) — confirm the patch prevents that fallout.
   const source = "{{ page. }}\n{{ bar }}"
-  const text = patchDanglingMemberAccess(source)
+  const { text } = patchDanglingMemberAccess(source)
   console.log({ text })
 
   // make sure it doesn't leak
@@ -181,7 +181,7 @@ test("sentinel gets inserted", {only: true}, () => {
   // A hard nunjucks parse error normally discards everything parsed after
   // it (see safeParseAsRoot) — confirm the patch prevents that fallout.
   const source = "{{ page."
-  const text = patchDanglingMemberAccess(source)
+  const { text } = patchDanglingMemberAccess(source)
 
   assert.match(text, new RegExp(SENTINEL))
 })
@@ -190,7 +190,7 @@ test("Should properly insert when multiple on same line", () => {
   // A hard nunjucks parse error normally discards everything parsed after
   // it (see safeParseAsRoot) — confirm the patch prevents that fallout.
   const source = "{{ page. }} {{ bar }}"
-  const text = patchDanglingMemberAccess(source)
+  const { text } = patchDanglingMemberAccess(source)
   console.log({ text })
 
   assert.match(text, new RegExp(`{{ page.${SENTINEL} }} {{ bar }}`))
@@ -198,7 +198,7 @@ test("Should properly insert when multiple on same line", () => {
 
 test("Should properly insert when only {{ is provided with no whitespace", {only: true}, () => {
   const source = "{{"
-  const text = patchDanglingMemberAccess(source)
+  const { text } = patchDanglingMemberAccess(source)
   console.log({ text })
 
   assert.match(text, new RegExp(`{{ ${SENTINEL} }}`))
@@ -206,8 +206,87 @@ test("Should properly insert when only {{ is provided with no whitespace", {only
 
 test("Should properly insert when {{ is provided with whitespace", () => {
   const source = "{{ "
-  const text = patchDanglingMemberAccess(source)
+  const { text } = patchDanglingMemberAccess(source)
   console.log({ text })
 
   assert.match(text, new RegExp(`{{ ${SENTINEL} }}`))
+})
+
+// The sentinel is *inserted*, so it shifts every offset after it. These guard
+// that mappings stay expressed in original-document coordinates rather than
+// leaking the patched ones.
+test("sentinel insertions don't leak into source mapping offsets", () => {
+  for (const source of ["{{ eleventy.", "{{ eleventy. }}", "{{ a }}\n{{ eleventy.\n", "{{", "{{ "]) {
+    const { mappings } = buildNunjucksTypeScriptSource(source, { eleventy: { version: "3.0" }, a: 1 })
+    for (const m of mappings) {
+      const start = m.sourceOffsets[0]
+      const end = start + m.lengths[0]
+      assert.ok(
+        end <= source.length,
+        `${JSON.stringify(source)}: mapping [${start},${end}) runs past the ${source.length}-char document`
+      )
+      assert.ok(
+        !source.slice(start, end).includes(SENTINEL),
+        `${JSON.stringify(source)}: sentinel text leaked into a source range`
+      )
+    }
+  }
+})
+
+test("dangling dot maps the caret onto the real member access", () => {
+  const source = "{{ eleventy."
+  const { text, mappings } = buildNunjucksTypeScriptSource(source, { eleventy: { version: "3.0" } })
+
+  // The segment covering the dot spans exactly the one `.` the user typed,
+  // while the generated side carries the full `.__COMPLETION__`.
+  const dot = mappings.find((m) => m.sourceOffsets[0] === source.indexOf("."))
+  assert.ok(dot, "expected a mapping anchored at the dangling dot")
+  assert.equal(dot.lengths[0], 1)
+  assert.equal(textAt(text, dot.generatedOffsets[0], dot.generatedLengths![0]), `.${SENTINEL}`)
+
+  // Caret sits one char into that segment, which puts it directly after the
+  // `.` in `data.eleventy.` — where TS lists members of `eleventy`.
+  const caret = dot.generatedOffsets[0] + 1
+  assert.ok(text.slice(0, caret).endsWith("data.eleventy."))
+})
+
+// Recovery shapes that have to keep the *rest* of the document parseable —
+// a synthetic closer placed at EOF instead of the tag's own line end used to
+// swallow the trailing HTML and drop every completion in the file.
+test("patching keeps the document parseable around incomplete tags", () => {
+  const cases: Array<[string, string]> = [
+    ["{{ eleventy.\n</body>", "dangling dot, unclosed"],
+    ["{{ eleventy.\n{{ obj.a }}\n", "dangling dot above another tag"],
+    ["{{ \n</body>", "empty unclosed tag"],
+    ["{{  }}\n", "empty closed tag"],
+    ["{% if eleventy. %}\n{% endif %}\n", "dangling dot in a block tag"],
+  ]
+  for (const [source, label] of cases) {
+    const { text } = patchDanglingMemberAccess(source)
+    assert.ok(text.includes(SENTINEL), `${label}: expected a sentinel in ${JSON.stringify(text)}`)
+    // The synthetic closer must land on the incomplete tag's own line.
+    const sentinelLine = text.slice(0, text.indexOf(SENTINEL)).split("\n").length
+    const closerLine = text.slice(0, text.indexOf("}", text.indexOf(SENTINEL))).split("\n").length
+    assert.equal(closerLine, sentinelLine, `${label}: closer escaped its line in ${JSON.stringify(text)}`)
+  }
+})
+
+test("a dangling dot doesn't consume the following tag's closer", () => {
+  const { text } = patchDanglingMemberAccess("{{ eleventy.\n{{ obj.a }}\n")
+  // Both tags stay independent; the second is untouched.
+  assert.ok(text.includes(`{{ eleventy.${SENTINEL} }}`), text)
+  assert.ok(text.includes("{{ obj.a }}"), text)
+})
+
+test("empty tags map the caret anywhere in the gap onto the sentinel", () => {
+  for (const source of ["{{  }}", "{{ "]) {
+    const { mappings } = buildNunjucksTypeScriptSource(source, { foo: 1 })
+    const synthetic = mappings.find((m) => m.lengths.every((l) => l === 0))
+    assert.ok(synthetic, `${JSON.stringify(source)}: expected a zero-length synthetic mapping`)
+    // The caret sits right after "{{ " — that offset must be covered.
+    assert.ok(
+      synthetic.sourceOffsets.includes(3),
+      `${JSON.stringify(source)}: caret offset 3 not in ${JSON.stringify(synthetic.sourceOffsets)}`
+    )
+  }
 })
