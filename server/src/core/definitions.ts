@@ -1,4 +1,5 @@
 import { CompletionItem, CompletionItemKind, InsertTextFormat } from "vscode-css-languageservice"
+import * as lexer from "nunjucks/src/lexer.js"
 
 /**
  * https://mozilla.github.io/nunjucks/templating.html#tags
@@ -348,24 +349,24 @@ export const filters: Record<string, CompletionItem> = {
 
 export const generalCompletions = {
   variable: {
-    label: '{{ }}',
+    label: lexer.VARIABLE_START + " " + lexer.VARIABLE_END,
     kind: CompletionItemKind.Snippet,
     documentation: 'Variable',
-    insertText: '{{ $1 }}',
+    insertText: `${lexer.VARIABLE_START} $1 ${lexer.VARIABLE_END}`,
     insertTextFormat: InsertTextFormat.Snippet
   },
   expression: {
-    label: '{% %}',
+    label: lexer.BLOCK_START + " " + lexer.BLOCK_END,
     kind: CompletionItemKind.Snippet,
     documentation: 'Expression',
-    insertText: '{% $1 %}',
+    insertText: `${lexer.BLOCK_START} $1 ${lexer.BLOCK_END}`,
     insertTextFormat: InsertTextFormat.Snippet
   },
   comment: {
-    label: '{# #}',
+    label: lexer.COMMENT_START + " " + lexer.COMMENT_END,
     kind: CompletionItemKind.Snippet,
     documentation: 'Comment',
-    insertText: '{# $1 #}',
+    insertText: `${lexer.COMMENT_START} $1 ${lexer.COMMENT_END}`,
     insertTextFormat: InsertTextFormat.Snippet
   }
 }

@@ -10,10 +10,15 @@ import type { URI } from "vscode-uri"
 import { getDocumentRegions } from "../embeddedSupport"
 import { jsonValueToTsType } from "./jsonToTsType"
 import { NunjucksExtension, NunjucksParser } from "./nunjucksParser"
+import * as lexer from "nunjucks/src/lexer.js";
+import { NEW_LINE_WITH_CAPTURE_GROUP } from "../constants";
 
 // Regex of if the word is a proper key. non-spaces and "_" or "-" are all valid.
 const IDENTIFIER_RE = /^(\S|_|-)*$/
 const DATA_VAR = "data"
+// Sentinel we insert after "." to not break parsing.
+const SENTINEL = "__COMPLETION__"
+
 
 interface Segment {
   /** offset into the original Nunjucks document */
@@ -164,7 +169,9 @@ function collectExpressions(node: unknown, document: TextDocument, bound: Readon
     const nested = new Set(bound)
     for (const name of forLoopBoundNames(forNode.name as nodes.AnyNode)) nested.add(name)
     collectExpressions(forNode.body, document, nested, out)
-    if (forNode.else_) collectExpressions(forNode.else_, document, bound, out)
+    if (forNode.else_) {
+      collectExpressions(forNode.else_, document, bound, out)
+    }
     return
   }
 
@@ -172,14 +179,6 @@ function collectExpressions(node: unknown, document: TextDocument, bound: Readon
     collectExpressions((n as any)[field], document, bound, out)
   }
 }
-
-/**
- * Matches a dangling member-access dot with nothing typed after it yet
- * (`{{ page. }}`, mid-typing) — capturing the run of same-line whitespace
- * between the dot and the tag's closing delimiter.
- */
-const DANGLING_DOT_RE = /\.\s+/g
-
 
 /**
  * Nunjucks's parser throws on a dangling `.` with nothing after it, and
@@ -198,9 +197,113 @@ const DANGLING_DOT_RE = /\.\s+/g
  * count from that point on and corrupt every subsequent position instead.
  * `{{ page.\n}}` (dangling dot, closing tag on the next line) is left
  * unpatched rather than risking that.
+ * We also want to this to work when a user has done something like:
+ * {{ page.
+ * {% if page.
+ * So we determine the starting tag and replace it.
  */
 function patchDanglingMemberAccess(text: string): string {
-  return text.replace(DANGLING_DOT_RE, (_match, whitespace: string) => `.x${whitespace.slice(1)}`)
+  const matches = {
+    [lexer.BLOCK_START]: lexer.BLOCK_END,
+    [lexer.VARIABLE_START]: lexer.VARIABLE_END,
+    [lexer.COMMENT_START]: lexer.COMMENT_END,
+  }
+
+  const openings = Object.keys(matches) as (keyof typeof matches)[]
+
+  const parts = text.split(NEW_LINE_WITH_CAPTURE_GROUP)
+
+  /**
+   * Keep a map of danglingDotOffsets, because mutating in place may mess with our loop. Instead, we'll track them as an object, store the line + offset position, and then insert the SENTINEL value.
+   * If we have multiple on the same line, we need to offset each one in the array by the length of the SENTINEL
+   */
+  type offsetArray = Array<{
+    offset: number,
+    endTag?: typeof matches[keyof typeof matches]
+  }>
+  const danglingDotOffsets = new Map<number, offsetArray>()
+
+  for (let i = 0; i < parts.length; i += 2) {
+    const line = parts[i]
+
+    // First need to grab the starting tokens, and then we parse until the next END token. It doesn't *have* to have whitespace after. We could use a string scanner here, but this is totally fine.
+    // This is a very very very dumb attempt to find the opening tag and append it to make it valid to get completions.
+    let start = ""
+    let str = ""
+
+    const danglingDotRegExp = /\.($|\s)/
+    for (let j = 0; j < line.length - 1; j++) {
+      const char = line[j]
+
+      // @ts-expect-error This is just silly TS.
+      // First we check if we have an opening tag IE: "{{", "{%", or "{#", if we do, we start allocating a string to check what is after the opening tag.
+      if (openings.includes(start)) {
+        // We have an opening tag, time to look for a closing tag.
+        str += char
+        // more casting because TS is annoying.
+        // Check if we end with "}}" or "%}" or "#}"
+        if (str.endsWith(matches[start as keyof typeof matches])) {
+          // Check if we have a "." prior to the closing tag.
+          if (danglingDotRegExp.test(str)) {
+            // We have somehting that looks like this:
+            // {{ foo. }}
+            // So we need to backtrack to the `.` and then insert the sentinel and closing tags.
+            const ary = danglingDotOffsets.get(i)
+            if (ary) {
+              ary.push({
+                offset: j + SENTINEL.length * ary.length
+              })
+            } else {
+              danglingDotOffsets.set(i, [{
+                offset: j
+              }])
+            }
+          }
+
+          // Reset everything because we either have a dangling member access, or we don't. If we do, we add it to an array of offsets to be modified later.
+          start = ""
+          str = ""
+        } else {
+          // We're at the end of the line, we have an opening tag, but no closing tag, and we have a `.` with whitespace after it or nothing.
+          // We have roughly the following:
+          // {{ foo.
+          // and we need to add the ending pair to get a proper parse.
+          if (j === line.length - 1 && danglingDotRegExp.test(str)) {
+            // We know the opening tag, so we force an endTag after the dangling dot.
+            const ary = danglingDotOffsets.get(i)
+            if (ary) {
+              ary.push({
+                offset: j + SENTINEL.length * ary.length,
+                endTag: matches[start as keyof typeof matches]
+              })
+            } else {
+              danglingDotOffsets.set(i, [{
+                offset: j,
+                endTag: matches[start as keyof typeof matches]
+              }])
+            }
+          }
+        }
+        continue
+      }
+
+      start += char
+    }
+  }
+
+  // Now we can mutate the parts
+  ;[...danglingDotOffsets.entries()].forEach(([line, ary]) => {
+    ary.forEach((obj) => {
+      const str = parts[line]
+      if (obj.endTag) {
+        parts[line] = str.slice(line, obj.offset + 1) + SENTINEL + obj.endTag
+      } else {
+        parts[line] = str.slice(line, obj.offset + 1) + SENTINEL + str.slice(obj.offset + 1, str.length)
+      }
+    })
+  })
+
+  return parts.join("")
 }
 
 export function buildNunjucksTypeScriptSource(
@@ -320,8 +423,14 @@ export class NunjucksTsVirtualCode implements VirtualCode {
     this.document = htmlLanguageService.parseHTMLDocument(
       html.TextDocument.create('', 'html', 0, snapshot.getText(0, snapshot.getLength()))
     );
+
     this.documentType = "html"
-    this.embeddedCodes = [...getEmbeddedCodesForHTMLDocument(snapshot, this.document)];
+
+    if (this.documentType === "html") {
+      this.embeddedCodes = [...getEmbeddedCodesForHTMLDocument(snapshot, this.document)];
+    } else {
+      this.embeddedCodes = []
+    }
   }
 
   update(documentText: string, data: unknown, extensions?: NunjucksExtension[]) {
@@ -424,14 +533,14 @@ const NUNJUCKS_FILE_RE = /\.(njk|nunjucks|jinja|html|md)(\.|$)/
 
 /**
  * LanguageIds editors report for these files beyond VS Code's own
- * "nunjucks" (from this project's `contributes.languages`) — e.g. Neovim
- * sends its buffer's `filetype` option *verbatim* as the LSP languageId,
+ * "nunjucks" (from this project's `contributes.languages`).
+ * Neovim sends its buffer's `filetype` option *verbatim* as the LSP languageId,
  * and users commonly set a compound filetype like `jinja.html` (stacking
  * "jinja" and "html" ftplugins/treesitter parsers) for better highlighting.
+ * Example:
+ * html.jinja, html+jinja, njk.html, you see where im going with this....
  */
-const NUNJUCKS_LANGUAGE_IDS = new Set([
-  "nunjucks", "jinja", "jinja-html", "jinja.html", "django-html", "html+jinja",
-])
+const NUNJUCKS_LANGUAGE_IDS_RE = /(nunjucks|njk|jinja)/
 
 /**
  * For an *opened* document, Volar calls `createVirtualCode` with whatever
@@ -445,7 +554,7 @@ const NUNJUCKS_LANGUAGE_IDS = new Set([
  * string a given editor/user setup happens to report.
  */
 function isNunjucksDocument(uri: URI, languageId: string): boolean {
-  return NUNJUCKS_FILE_RE.test(uri.path) || NUNJUCKS_LANGUAGE_IDS.has(languageId)
+  return NUNJUCKS_FILE_RE.test(uri.path) || NUNJUCKS_LANGUAGE_IDS_RE.test(languageId)
 }
 
 /**
@@ -525,68 +634,101 @@ export function createNunjucksLanguagePlugin(
  * https://github.com/volarjs/starter/blob/master/packages/language-server/src/languagePlugin.ts#L78-L143
  */
 function* getEmbeddedCodesForHTMLDocument(snapshot: ts.IScriptSnapshot, htmlDocument: html.HTMLDocument): Generator<VirtualCode> {
-	const styles = htmlDocument.roots.filter(root => root.tag === 'style');
-	const scripts = htmlDocument.roots.filter(root => root.tag === 'script');
+  const styles = htmlDocument.roots.filter(root => root.tag === 'style');
+  const scripts = htmlDocument.roots.filter(root => root.tag === 'script');
 
-	for (let i = 0; i < styles.length; i++) {
-		const style = styles[i];
-		if (style.startTagEnd !== undefined && style.endTagStart !== undefined) {
-			const styleText = snapshot.getText(style.startTagEnd, style.endTagStart);
-			yield {
-				id: 'style_' + i,
-				languageId: 'css',
-				snapshot: {
-					getText: (start, end) => styleText.substring(start, end),
-					getLength: () => styleText.length,
-					getChangeRange: () => undefined,
-				},
-				mappings: [{
-					sourceOffsets: [style.startTagEnd],
-					generatedOffsets: [0],
-					lengths: [styleText.length],
-					data: {
-						completion: true,
-						format: true,
-						navigation: true,
-						semantic: true,
-						structure: true,
-						verification: true,
-					},
-				}],
-				embeddedCodes: [],
-			};
-		}
-	}
+  for (let i = 0; i < styles.length; i++) {
+    const style = styles[i];
+    if (style.startTagEnd !== undefined && style.endTagStart !== undefined) {
+      const styleText = snapshot.getText(style.startTagEnd, style.endTagStart);
+      yield {
+        id: 'style_' + i,
+        languageId: 'css',
+        snapshot: {
+          getText: (start, end) => styleText.substring(start, end),
+          getLength: () => styleText.length,
+          getChangeRange: () => undefined,
+        },
+        mappings: [{
+          sourceOffsets: [style.startTagEnd],
+          generatedOffsets: [0],
+          lengths: [styleText.length],
+          data: {
+            completion: true,
+            format: true,
+            navigation: true,
+            semantic: true,
+            structure: true,
+            verification: true,
+          },
+        }],
+        embeddedCodes: [],
+      };
+    }
+  }
 
-	for (let i = 0; i < scripts.length; i++) {
-		const script = scripts[i]
-		if (script.startTagEnd !== undefined && script.endTagStart !== undefined) {
-			const text = snapshot.getText(script.startTagEnd, script.endTagStart);
-			const lang = script.attributes?.lang;
-			const isTs = lang === 'ts' || lang === '"ts"' || lang === "'ts'";
-			yield {
-				id: 'script_' + i,
-				languageId: isTs ? 'typescript' : 'javascript',
-				snapshot: {
-					getText: (start, end) => text.substring(start, end),
-					getLength: () => text.length,
-					getChangeRange: () => undefined,
-				},
-				mappings: [{
-					sourceOffsets: [script.startTagEnd],
-					generatedOffsets: [0],
-					lengths: [text.length],
-					data: {
-						completion: true,
-						format: true,
-						navigation: true,
-						semantic: true,
-						structure: true,
-						verification: true,
-					},
-				}],
-				embeddedCodes: [],
-			};
-		}
-	}
+  for (let i = 0; i < scripts.length; i++) {
+    const script = scripts[i]
+    if (script.startTagEnd !== undefined && script.endTagStart !== undefined) {
+      const text = snapshot.getText(script.startTagEnd, script.endTagStart);
+      const lang = script.attributes?.lang;
+      const isTs = lang === 'ts' || lang === '"ts"' || lang === "'ts'";
+      yield {
+        id: 'script_' + i,
+        languageId: isTs ? 'typescript' : 'javascript',
+        snapshot: {
+          getText: (start, end) => text.substring(start, end),
+          getLength: () => text.length,
+          getChangeRange: () => undefined,
+        },
+        mappings: [{
+          sourceOffsets: [script.startTagEnd],
+          generatedOffsets: [0],
+          lengths: [text.length],
+          data: {
+            completion: true,
+            format: true,
+            navigation: true,
+            semantic: true,
+            structure: true,
+            verification: true,
+          },
+        }],
+        embeddedCodes: [],
+      };
+    }
+  }
+}
+
+/**
+ * This is for `{{ foo. }}`
+ */
+function insertSentinelAfterDot (str: string) {
+  let finalString = str
+  // We walk backwards to find the first instance of a "."
+  for (let i = str.length - 1; i >= 0; i--) {
+    const char = str[i]
+    if (char === ".") {
+      finalString = str.slice(0, i + 2) + SENTINEL + str.slice(i + 1, str.length)
+      break
+    }
+  }
+  return finalString
+}
+
+
+/**
+ * This is for `{{ foo.`
+ */
+function insertSentinelAfterDotAndClosingTag (str: string, closingTag: string) {
+  let finalString = str
+  // We walk backwards to find the first instance of a "."
+  for (let i = str.length - 1; i >= 0; i--) {
+    const char = str[i]
+    if (char === ".") {
+      finalString = str.slice(0, i + 2) + SENTINEL + closingTag
+      break
+    }
+  }
+  return finalString
 }

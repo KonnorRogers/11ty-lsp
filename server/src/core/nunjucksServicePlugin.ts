@@ -66,14 +66,24 @@ export function createNunjucksServicePlugin(host: NunjucksServicePluginHost): La
 
           const { currentLineContent } = getContext(document, position.line, position.character)
           const word = provider.getWordAtCursor(currentLineContent, position.character, position.line)
-          if (!word) return null
+
+          if (!word) {
+            return null
+          }
 
           const { ast } = parser.parseDocument(document, host.getExtensions(sourceUri))
           const { node } = parser.findNodeAtPosition(ast, position.line, position.character)
-          if (node?.typename !== "Filter") return null
+
+          // Only filters should be provided directly as completions. Literals, Symbols, and LookupVal's should all go through TypeScript typing.
+          if (node?.typename !== "Filter") {
+            return null
+          }
 
           const documentation = definitions.filters[word.word]?.documentation as string | undefined
-          if (!documentation) return null
+
+          if (!documentation) {
+            return null
+          }
 
           return {
             contents: { kind: MarkupKind.PlainText, value: documentation },
