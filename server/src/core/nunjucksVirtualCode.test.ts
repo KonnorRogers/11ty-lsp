@@ -290,3 +290,57 @@ test("empty tags map the caret anywhere in the gap onto the sentinel", () => {
     )
   }
 })
+
+// —— typed filters ——
+// A filter is transcribed into a call on the synthesized `__filters` object,
+// so TypeScript can type it and propagate its return type.
+function statementFor(source: string, data: unknown) {
+  const { text } = buildNunjucksTypeScriptSource(source, data)
+  return text.split("\n").find((l) => l.startsWith("(") && !l.startsWith("(undefined")) ?? ""
+}
+
+test("a filter becomes a call on __filters with the piped value first", () => {
+  assert.equal(statementFor("{{ foo | upper }}", { foo: "x" }), "(__filters.upper(data.foo));")
+  assert.equal(statementFor("{{ nums | sum }}", { nums: [1] }), "(__filters.sum(data.nums));")
+})
+
+test("filter arguments are transcribed after the input", () => {
+  assert.equal(statementFor("{{ foo | replace('a', 'b') }}", { foo: "x" }), '(__filters.replace(data.foo, "a", "b"));')
+})
+
+test("chained filters nest, innermost pipe first", () => {
+  assert.equal(
+    statementFor("{{ items | first | upper }}", { items: ["x"] }),
+    "(__filters.upper(__filters.first(data.items)));"
+  )
+})
+
+test("member access on a filtered value transcribes for return-type propagation", () => {
+  assert.equal(
+    statementFor("{{ (items | first).name }}", { items: [{ name: "x" }] }),
+    "(__filters.first(data.items).name);"
+  )
+})
+
+test("an unknown (custom) filter still transcribes, typed loosely via the index signature", () => {
+  assert.equal(statementFor("{{ foo | titlecase }}", { foo: "x" }), "(__filters.titlecase(data.foo));")
+})
+
+test("the __filters declaration is emitted and self-consistent", () => {
+  const { text } = buildNunjucksTypeScriptSource("{{ foo | upper }}", { foo: "x" })
+  assert.match(text, /declare const __filters: \{/)
+  assert.match(text, /first<T>\(input: readonly T\[\]\): T;/)
+  assert.match(text, /\[filter: string\]: \(input: any, \.\.\.args: any\[\]\) => any;/)
+})
+
+test("the filter name maps for hover but opts out of completion", () => {
+  const source = "{{ foo | upper }}"
+  const { text, mappings } = buildNunjucksTypeScriptSource(source, { foo: "x" })
+  const nameStart = source.indexOf("upper")
+  const nameMapping = mappings.find((m) => m.sourceOffsets[0] === nameStart)
+  assert.ok(nameMapping, "expected a mapping over the filter name")
+  assert.equal(nameMapping.data.completion, false, "filter-name completion belongs to the service plugin")
+  assert.equal(nameMapping.data.navigation, true)
+  // …and it points at the __filters member, not a data property.
+  assert.equal(textAt(text, nameMapping.generatedOffsets[0], nameMapping.generatedLengths![0]), "upper")
+})

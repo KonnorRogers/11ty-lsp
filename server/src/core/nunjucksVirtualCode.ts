@@ -12,9 +12,12 @@ import { jsonValueToTsType } from "./jsonToTsType"
 import { NunjucksExtension, NunjucksParser } from "./nunjucksParser"
 import * as lexer from "nunjucks/src/lexer.js";
 import { NEW_LINE_WITH_CAPTURE_GROUP } from "../constants";
+import { buildFiltersDeclaration, FILTERS_VAR } from "./builtinFilters";
 
 // Regex of if the word is a proper key. non-spaces and "_" or "-" are all valid.
 const IDENTIFIER_RE = /^(\S|_|-)*$/
+// A member name we can emit as `x.name` rather than `x["name"]`.
+const JS_IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/
 const DATA_VAR = "data"
 // Sentinel we insert after "." to not break parsing.
 export const SENTINEL = "__COMPLETION__"
@@ -35,6 +38,13 @@ interface Segment {
   generatedOffset: number
   /** length of the corresponding span in the transcribed expression text */
   generatedLength: number
+  /**
+   * Whether TS completion may fire through this segment. Defaults to `true`.
+   * A filter *name* maps here only for hover/go-to — filter-name completion is
+   * owned by the service plugin (which knows the project's custom filters),
+   * so this is `false` for those segments.
+   */
+  completion?: boolean
 }
 
 interface Transcribed {
@@ -137,77 +147,175 @@ function tokenize(src: string, opts?: object): Lexed {
 }
 
 /**
- * Transcribes a `Symbol` or `LookupVal` chain (`{{ obj.a.b }}`) into a TS
- * member-access expression on the synthesized `data` const, producing one
- * `Segment` per dotted/bracketed piece so hover/completion on any individual
- * segment maps back to the exact source range for that piece — not the
- * whole chain at once.
+ * Transcribes a template expression into a TypeScript expression against the
+ * synthesized `data` / `__filters` declarations, producing one `Segment` per
+ * meaningful piece so hover/completion on any individual piece maps back to
+ * its exact source range — not the whole expression at once.
+ *
+ * Handles the data-access chains (`{{ obj.a.b }}`) that carry the data types,
+ * the filters (`{{ x | join(",") }}`) that carry filter types and propagate
+ * their return type, and the literals that appear as filter arguments.
+ * Anything it doesn't model returns `null`, and the caller falls back to
+ * pulling typeable sub-expressions out of it.
+ *
+ * `bound` are names introduced by an enclosing `{% for %}` — they aren't
+ * `data` properties, so a chain rooted at one can't be transcribed (loop
+ * variable typing is deferred); returning `null` for it lets the caller skip
+ * it rather than emit a bogus `data.item`.
  */
-function transcribeChain(node: nodes.AnyNode, document: TextDocument, patched: PatchedText): Transcribed | null {
-  if (node.typename === "Symbol") {
-    const start = document.offsetAt({ line: node.lineno, character: node.colno })
-    const sourceOffset = toSourceOffsetClamped(patched, start)
-    const prefix = `${DATA_VAR}.`
-    return {
-      text: prefix + node.value,
-      segments: [{
+function transcribeExpr(node: nodes.AnyNode, document: TextDocument, patched: PatchedText, bound: ReadonlySet<string>): Transcribed | null {
+  switch (node.typename) {
+    case "Symbol": return transcribeSymbol(node, document, patched, bound)
+    case "LookupVal": return transcribeLookup(node, document, patched, bound)
+    case "Literal": return transcribeLiteral(node)
+    case "Filter":
+    case "FilterAsync": return transcribeFilter(node, document, patched, bound)
+    case "Group": {
+      // A parenthesized single expression, e.g. `(items | first)` in
+      // `(items | first).name`.
+      const children = (node as unknown as { children?: nodes.AnyNode[] }).children
+      return children?.length === 1 ? transcribeExpr(children[0], document, patched, bound) : null
+    }
+    default: return null
+  }
+}
+
+function transcribeSymbol(node: nodes.AnyNode, document: TextDocument, patched: PatchedText, bound: ReadonlySet<string>): Transcribed | null {
+  const name = (node as nodes.Symbol).value
+  if (bound.has(name)) return null
+  const start = document.offsetAt({ line: node.lineno, character: node.colno })
+  const sourceOffset = toSourceOffsetClamped(patched, start)
+  const prefix = `${DATA_VAR}.`
+  return {
+    text: prefix + name,
+    segments: [{
+      sourceOffset,
+      // A wholly synthetic symbol (the sentinel in `{{ }}`) collapses to a
+      // zero-length source range at the point we inserted it, which is
+      // exactly where the caret sits.
+      sourceLength: toSourceOffsetClamped(patched, start + name.length) - sourceOffset,
+      generatedOffset: prefix.length,
+      generatedLength: name.length,
+    }],
+  }
+}
+
+function transcribeLookup(node: nodes.AnyNode, document: TextDocument, patched: PatchedText, bound: ReadonlySet<string>): Transcribed | null {
+  const lookup = node as unknown as { target: nodes.AnyNode; val: nodes.AnyNode }
+  const target = transcribeExpr(lookup.target, document, patched, bound)
+  if (!target) {
+    return null
+  }
+
+  // `val`'s declared type (`Token & { value: unknown }`) doesn't expose
+  // `typename`, but at runtime it's a real AST node — cast to check it.
+  const keyNode = lookup.val as unknown as nodes.AnyNode
+  // Computed member access (`obj[someVar]`) parses `val` as a `Symbol`
+  // (a variable reference), not a static string key — v1 only supports
+  // static dotted/bracket access, so bail out.
+  if (keyNode.typename !== "Literal" || typeof keyNode.value !== "string") {
+    return null
+  }
+
+  const key = keyNode.value
+  const isIdentifier = IDENTIFIER_RE.test(key)
+  const memberText = isIdentifier ? `.${key}` : `[${JSON.stringify(key)}]`
+
+  // `node.colno` is the position of the member-access token itself (the
+  // `.` or `[`), and `keyNode.colno` is the position of the key text —
+  // together they bound the full source span for this one segment.
+  const dotOffset = document.offsetAt({ line: node.lineno, character: node.colno })
+  const keyOffset = document.offsetAt({ line: keyNode.lineno, character: keyNode.colno })
+  // Both ends go through the mapper: for a real key this is unchanged,
+  // and for a sentinel key the end collapses back onto the dot, leaving a
+  // 1-char source span over the `.` the user actually typed.
+  const sourceOffset = toSourceOffsetClamped(patched, dotOffset)
+  const sourceLength = toSourceOffsetClamped(patched, keyOffset + key.length) - sourceOffset
+
+  return {
+    text: target.text + memberText,
+    segments: [
+      ...target.segments,
+      {
         sourceOffset,
-        // A wholly synthetic symbol (the sentinel in `{{ }}`) collapses to a
-        // zero-length source range at the point we inserted it, which is
-        // exactly where the caret sits.
-        sourceLength: toSourceOffsetClamped(patched, start + node.value.length) - sourceOffset,
-        generatedOffset: prefix.length,
-        generatedLength: node.value.length,
-      }],
-    }
+        sourceLength,
+        generatedOffset: target.text.length,
+        generatedLength: memberText.length,
+      },
+    ],
+  }
+}
+
+/** A literal filter argument (`{{ x | join(", ") }}`) — no source mapping needed. */
+function transcribeLiteral(node: nodes.AnyNode): Transcribed {
+  const value = (node as nodes.Literal).value
+  let text: string
+  if (typeof value === "string") text = JSON.stringify(value)
+  else if (typeof value === "number" || typeof value === "boolean") text = String(value)
+  else if (value === null) text = "null"
+  else text = "(undefined as any)"
+  return { text, segments: [] }
+}
+
+/**
+ * `{{ x | join(", ") }}` -> `__filters.join(data.x, ", ")`. Nunjucks already
+ * models a filter as a call whose first argument is the piped value, so the
+ * transcription is a direct rewrite, and the built-in filter types (see
+ * `builtinFilters.ts`) give the call — and everything downstream of it — a
+ * real return type.
+ */
+function transcribeFilter(node: nodes.AnyNode, document: TextDocument, patched: PatchedText, bound: ReadonlySet<string>): Transcribed | null {
+  const filter = node as unknown as { name?: nodes.AnyNode; args?: { children?: nodes.AnyNode[] } }
+  const nameNode = filter.name
+  const name = nameNode?.typename === "Symbol" ? (nameNode as nodes.Symbol).value : undefined
+  const children = filter.args?.children ?? []
+  if (typeof name !== "string" || children.length === 0) {
+    return null
   }
 
-  if (node.typename === "LookupVal") {
-    const target = transcribeChain(node.target as nodes.AnyNode, document, patched)
-    if (!target) {
-      return null
-    }
+  // The piped value is the first argument; if it can't be transcribed (e.g. a
+  // loop-bound root) we can't type the call meaningfully, so bail and let the
+  // caller pull data chains out of the args instead.
+  const input = transcribeExpr(children[0], document, patched, bound)
+  if (!input) {
+    return null
+  }
+  const rest = children.slice(1).map(
+    (arg) => transcribeExpr(arg, document, patched, bound) ?? { text: "(undefined as any)", segments: [] as Segment[] }
+  )
 
-    // `val`'s declared type (`Token & { value: unknown }`) doesn't expose
-    // `typename`, but at runtime it's a real AST node — cast to check it.
-    const keyNode = node.val as unknown as nodes.AnyNode
-    // Computed member access (`obj[someVar]`) parses `val` as a `Symbol`
-    // (a variable reference), not a static string key — v1 only supports
-    // static dotted/bracket access, so bail out.
-    if (keyNode.typename !== "Literal" || typeof keyNode.value !== "string") {
-      return null
-    }
+  const usesDot = JS_IDENTIFIER_RE.test(name)
+  const access = usesDot ? `${FILTERS_VAR}.${name}` : `${FILTERS_VAR}[${JSON.stringify(name)}]`
 
-    const key = keyNode.value
-    const isIdentifier = IDENTIFIER_RE.test(key)
-    const memberText = isIdentifier ? `.${key}` : `[${JSON.stringify(key)}]`
-
-    // `node.colno` is the position of the member-access token itself (the
-    // `.` or `[`), and `keyNode.colno` is the position of the key text —
-    // together they bound the full source span for this one segment.
-    const dotOffset = document.offsetAt({ line: node.lineno, character: node.colno })
-    const keyOffset = document.offsetAt({ line: keyNode.lineno, character: keyNode.colno })
-    // Both ends go through the mapper: for a real key this is unchanged,
-    // and for a sentinel key the end collapses back onto the dot, leaving a
-    // 1-char source span over the `.` the user actually typed.
-    const sourceOffset = toSourceOffsetClamped(patched, dotOffset)
-    const sourceLength = toSourceOffsetClamped(patched, keyOffset + key.length) - sourceOffset
-
-    return {
-      text: target.text + memberText,
-      segments: [
-        ...target.segments,
-        {
-          sourceOffset,
-          sourceLength,
-          generatedOffset: target.text.length,
-          generatedLength: memberText.length,
-        },
-      ],
-    }
+  const segments: Segment[] = []
+  if (usesDot && nameNode) {
+    // Map the source filter name onto the generated member for hover/go-to,
+    // but leave completion to the service plugin (see `Segment.completion`).
+    const start = document.offsetAt({ line: nameNode.lineno, character: nameNode.colno })
+    const sourceOffset = toSourceOffsetClamped(patched, start)
+    segments.push({
+      sourceOffset,
+      sourceLength: toSourceOffsetClamped(patched, start + name.length) - sourceOffset,
+      generatedOffset: FILTERS_VAR.length + 1, // just past `__filters.`
+      generatedLength: name.length,
+      completion: false,
+    })
   }
 
-  return null
+  let text = `${access}(`
+  const append = (part: Transcribed) => {
+    const shift = text.length
+    text += part.text
+    for (const seg of part.segments) segments.push({ ...seg, generatedOffset: seg.generatedOffset + shift })
+  }
+  append(input)
+  for (const arg of rest) {
+    text += ", "
+    append(arg)
+  }
+  text += ")"
+
+  return { text, segments }
 }
 
 /** Names bound by an enclosing `{% for %}` — not real `data` properties. */
@@ -222,11 +330,6 @@ function forLoopBoundNames(nameNode: nodes.AnyNode): string[] {
   return []
 }
 
-function rootSymbolName(node: nodes.AnyNode): string | null {
-  if (node.typename === "Symbol") return node.value
-  if (node.typename === "LookupVal") return rootSymbolName(node.target as nodes.AnyNode)
-  return null
-}
 
 /**
  * Walks the whole AST once, emitting a transcribed statement for every
@@ -252,15 +355,12 @@ function collectExpressions(node: unknown, document: TextDocument, patched: Patc
   const n = node as nodes.AnyNode
 
   if (n.typename === "Symbol" || n.typename === "LookupVal") {
-    const rootName = rootSymbolName(n)
-    if (rootName != null && !bound.has(rootName)) {
-      const transcribed = transcribeChain(n, document, patched)
-      if (transcribed) {
-        out.push(transcribed)
-        // Fully consumed as one chain — don't also descend into
-        // `target`/`val` as separate top-level chains.
-        return
-      }
+    const transcribed = transcribeExpr(n, document, patched, bound)
+    if (transcribed) {
+      out.push(transcribed)
+      // Fully consumed as one chain — don't also descend into
+      // `target`/`val` as separate top-level chains.
+      return
     }
     // Couldn't transcribe the whole chain (loop-bound root, or a computed
     // `obj[expr]` access) — fall through and look for independently
@@ -268,12 +368,18 @@ function collectExpressions(node: unknown, document: TextDocument, patched: Patc
     // and `key` in `obj[key]`).
   }
 
-  // `{{ foo | title }}` parses the filter name as a `Symbol`, but it names a
-  // filter, not a property of `data` — transcribing it would both offer
-  // nonsense completions (`data.title`) and let the TS service claim
-  // completion requests in filter position. Only the arguments are real
-  // data expressions.
+  // `{{ x | join(",") }}` becomes `__filters.join(data.x, ",")`, giving the
+  // filter a real type and propagating its return type to anything wrapping
+  // it. The filter name itself maps for hover only — completion of filter
+  // names is the service plugin's job (it knows the project's own filters).
   if (n.typename === "Filter" || n.typename === "FilterAsync") {
+    const transcribed = transcribeExpr(n, document, patched, bound)
+    if (transcribed) {
+      out.push(transcribed)
+      return
+    }
+    // Couldn't type the whole filter (e.g. a loop-bound input) — pull any
+    // typeable data chains out of its arguments instead.
     const filterNode = n as unknown as Record<"args", nodes.AnyNode | null>
     collectExpressions(filterNode.args, document, patched, bound, out)
     return
@@ -329,6 +435,9 @@ export function buildNunjucksTypeScriptSource(
 
   const dataType = data === undefined ? "unknown" : jsonValueToTsType(data)
   let generated = `declare const ${DATA_VAR}: ${dataType};\n`
+  // Filter types are shared and source-independent, so the same declaration is
+  // prepended to every synthesized file. Nothing maps back to it.
+  generated += buildFiltersDeclaration()
   const mappings: CodeMapping[] = []
 
   const expressions: Transcribed[] = []
@@ -381,7 +490,9 @@ export function buildNunjucksTypeScriptSource(
         lengths: [seg.sourceLength],
         generatedLengths: [seg.generatedLength],
         data: {
-          completion: true,
+          // Filter-name segments opt out so the service plugin owns filter
+          // completion; data segments default to on.
+          completion: seg.completion ?? true,
           // hover, go-to-definition, inlay hints, etc.
           semantic: true,
           navigation: true,

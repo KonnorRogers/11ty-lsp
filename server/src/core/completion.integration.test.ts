@@ -175,6 +175,10 @@ const CASES: Array<{ name: string; insert: string; caretBack?: number; expect: s
   { name: "partial tag name still offers shortcodes", insert: "\n    {% ca", expect: ["callout"] },
   { name: "filter slot offers custom filters", insert: "\n    {{ foo | ", expect: ["titlecase", "slugify", "upper"] },
   { name: "partial filter name offers filters, not data", insert: "\n    {{ foo | title", expect: ["titlecase"] },
+  // Typed filters: a filter's return type propagates, so member access on a
+  // filtered value completes on the result type (see builtinFilters.ts).
+  { name: "member access on a filtered value (element type)", insert: "\n    {{ (items | first). }}", caretBack: 3, expect: ["charAt", "toUpperCase"] },
+  { name: "member access on an array-returning filter", insert: "\n    {{ (items | reverse). }}", caretBack: 3, expect: ["map", "filter", "length"] },
   // Well-formed input must keep working.
   { name: "complete member access", insert: "\n    {{ eleventy.ver }}", caretBack: 3, expect: ["version"] },
   { name: "top-level symbol", insert: "\n    {{ foo }}", caretBack: 5, expect: ["foo", "bar", "items"] },
