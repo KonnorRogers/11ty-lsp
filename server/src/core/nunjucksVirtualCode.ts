@@ -223,7 +223,8 @@ export function patchDanglingMemberAccess(text: string): string {
    */
   type offsetArray = Array<{
     offset: number,
-    endTag?: typeof matches[keyof typeof matches]
+    beforeSentinel?: string
+    afterSentinel?: string
   }>
   const danglingDotOffsets = new Map<number, offsetArray>()
 
@@ -289,12 +290,30 @@ export function patchDanglingMemberAccess(text: string): string {
             if (ary) {
               ary.push({
                 offset: j + SENTINEL.length * ary.length,
-                endTag: " " + matches[start as keyof typeof matches]
+                afterSentinel: " " + matches[start as keyof typeof matches]
               })
             } else {
               danglingDotOffsets.set(i, [{
                 offset: j,
-                endTag: " " + matches[start as keyof typeof matches]
+                afterSentinel: " " + matches[start as keyof typeof matches]
+              }])
+            }
+            continue
+          }
+
+          // If we trim whitespace and theres nothing, insert a SENTINEL.
+          if (j === line.length - 1 && str.trim() === "") {
+            // We know the opening tag, so we force an endTag after the dangling dot.
+            const ary = danglingDotOffsets.get(i)
+            if (ary) {
+              ary.push({
+                offset: j + SENTINEL.length * ary.length,
+                afterSentinel: " " + matches[start as keyof typeof matches]
+              })
+            } else {
+              danglingDotOffsets.set(i, [{
+                offset: j,
+                afterSentinel: " " + matches[start as keyof typeof matches]
               }])
             }
           }
@@ -303,26 +322,41 @@ export function patchDanglingMemberAccess(text: string): string {
       }
 
       start += char
-    }
 
-    console.log({ start, str })
+      // This is a one time test for the case of "{{" and nothing afterwards.
+      if (openings.includes(start)) {
+          // If we trim whitespace and theres nothing, insert a SENTINEL.
+          if (j === line.length - 1 && str.trim() === "") {
+            // We know the opening tag, so we force an endTag after the dangling dot.
+            const ary = danglingDotOffsets.get(i)
+            if (ary) {
+              ary.push({
+                offset: j + SENTINEL.length * ary.length,
+                beforeSentinel: " ",
+                afterSentinel: " " + matches[start as keyof typeof matches]
+              })
+            } else {
+              danglingDotOffsets.set(i, [{
+                offset: j,
+                beforeSentinel: " ",
+                afterSentinel: " " + matches[start as keyof typeof matches]
+              }])
+            }
+          }
+      }
+    }
   }
 
   // Now we can mutate the parts
   ;[...danglingDotOffsets.entries()].forEach(([line, ary]) => {
     ary.forEach((obj) => {
       const str = parts[line]
-      if (obj.endTag) {
-        const patchedStr = str.slice(line, obj.offset + 1) + SENTINEL + obj.endTag
-        console.log(patchedStr)
-        parts[line] = patchedStr
-      } else {
-        const before = str.slice(line, obj.offset + 1)
-        const after = str.slice(obj.offset + 1, str.length)
-        console.log({ before, after })
-        const patchedStr = before + SENTINEL + after
-        parts[line] = patchedStr
-      }
+      const before = str.slice(line, obj.offset + 1)
+      const after = str.slice(obj.offset + 1, str.length)
+      const beforeSentinel = obj.beforeSentinel || ""
+      const afterSentinel = obj.afterSentinel || ""
+      const patchedStr = before + beforeSentinel + SENTINEL + afterSentinel + after
+      parts[line] = patchedStr
     })
   })
 

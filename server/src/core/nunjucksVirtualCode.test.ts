@@ -182,12 +182,11 @@ test("sentinel gets inserted", {only: true}, () => {
   // it (see safeParseAsRoot) — confirm the patch prevents that fallout.
   const source = "{{ page."
   const text = patchDanglingMemberAccess(source)
-  console.log({ text })
 
   assert.match(text, new RegExp(SENTINEL))
 })
 
-test("Should properly insert when multiple on same line", {only: true}, () => {
+test("Should properly insert when multiple on same line", () => {
   // A hard nunjucks parse error normally discards everything parsed after
   // it (see safeParseAsRoot) — confirm the patch prevents that fallout.
   const source = "{{ page. }} {{ bar }}"
@@ -195,4 +194,20 @@ test("Should properly insert when multiple on same line", {only: true}, () => {
   console.log({ text })
 
   assert.match(text, new RegExp(`{{ page.${SENTINEL} }} {{ bar }}`))
+})
+
+test("Should properly insert when only {{ is provided with no whitespace", {only: true}, () => {
+  const source = "{{"
+  const text = patchDanglingMemberAccess(source)
+  console.log({ text })
+
+  assert.match(text, new RegExp(`{{ ${SENTINEL} }}`))
+})
+
+test("Should properly insert when {{ is provided with whitespace", () => {
+  const source = "{{ "
+  const text = patchDanglingMemberAccess(source)
+  console.log({ text })
+
+  assert.match(text, new RegExp(`{{ ${SENTINEL} }}`))
 })
