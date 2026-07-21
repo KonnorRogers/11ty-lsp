@@ -45,12 +45,13 @@ items:
     {{ eleventy.version }}
 
     {{ eleventy }}
+    {{ eleventy.version }}
     {{ foo }}
 
     {% for item in items %}
       {{ item }}
     {% endfor %}
 
-    {% include "foo.bar" %}
+    {% include "foo.bar" ignore missing %}
   </body>
 </html>

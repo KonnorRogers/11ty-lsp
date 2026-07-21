@@ -19,7 +19,13 @@ import { pathToFileURL } from "node:url"
 
 const ROOT = path.resolve(__dirname, "../../..")
 const SERVER = path.join(ROOT, "server/src/server.ts")
-const FIXTURE = path.join(ROOT, "test-files/eleventy-4/test.njk")
+// A dedicated fixture project these tests own — deliberately NOT the
+// hand-edited `eleventy-4/test.njk`. It's its own isolated 11ty project (own
+// config, own input dir), so a work-in-progress edit elsewhere can't break its
+// build and make every data-driven completion silently vanish. Its front
+// matter (foo/bar/obj/items) and config registrations (shout/image/callout/
+// banner/titlecase/slugify) are what the assertions below rely on.
+const FIXTURE = path.join(ROOT, "test-files/lsp-fixture/index.njk")
 const FIXTURE_URI = pathToFileURL(FIXTURE).toString()
 
 /** 11ty has to boot and resolve the project's data before anything resolves. */
@@ -150,6 +156,37 @@ async function completionsFor(insert: string, caretBack = 0): Promise<string[]> 
     await sleep(200)
   }
 }
+
+// A hover variant: opens the doc, hovers the caret, returns the rendered text.
+async function hoverText(insert: string, marker: string): Promise<string> {
+  const at = fixture.indexOf("  </body>")
+  const text = fixture.slice(0, at) + insert + "\n" + fixture.slice(at)
+  const caret = at + insert.indexOf(marker)
+  const before = text.slice(0, caret)
+  const line = (before.match(/\n/g) ?? []).length
+  const character = caret - (before.lastIndexOf("\n") + 1)
+  client.notify("textDocument/didOpen", { textDocument: { uri: FIXTURE_URI, languageId: "nunjucks", version: version++, text } })
+  try {
+    for (let attempt = 0; attempt < RETRIES; attempt++) {
+      await sleep(attempt === 0 ? SETTLE_MS : 500)
+      const res = await client.request("textDocument/hover", { textDocument: { uri: FIXTURE_URI }, position: { line, character } })
+      const value = res.result?.contents?.value
+      if (value) return String(value)
+    }
+    return ""
+  } finally {
+    client.notify("textDocument/didClose", { textDocument: { uri: FIXTURE_URI } })
+    await sleep(200)
+  }
+}
+
+test("hover: a {% set %} variable from a filtered array is typed, not any", { timeout: 60_000 }, async () => {
+  // Regression: `{% set l = [...] | first %}` used to hover as `any` because
+  // the array literal wasn't transcribed and the set target became `data.l`.
+  const hover = await hoverText('\n    {% set l = ["bar", "baz"] | first %}\n    {{ l }}', "l }")
+  assert.match(hover, /string/, `expected the set variable to hover as string, got: ${hover}`)
+  assert.doesNotMatch(hover, /\bany\b/, `set variable should not be any: ${hover}`)
+})
 
 const CASES: Array<{ name: string; insert: string; caretBack?: number; expect: string[] }> = [
   // Incomplete tags — each of these returned nothing before the recovery fixes.

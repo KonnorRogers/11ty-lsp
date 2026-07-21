@@ -11,7 +11,6 @@ import { getDocumentRegions } from "../embeddedSupport"
 import { jsonValueToTsType } from "./jsonToTsType"
 import { NunjucksExtension, NunjucksParser } from "./nunjucksParser"
 import * as lexer from "nunjucks/src/lexer.js";
-import { NEW_LINE_WITH_CAPTURE_GROUP } from "../constants";
 import { buildFiltersDeclaration, FILTERS_VAR } from "./builtinFilters";
 
 // Regex of if the word is a proper key. non-spaces and "_" or "-" are all valid.
@@ -51,7 +50,30 @@ interface Transcribed {
   /** e.g. `data.obj.a.b.c.d` */
   text: string
   segments: Segment[]
+  /**
+   * When set, `text` is a complete statement emitted verbatim (`const x = …`)
+   * rather than an expression wrapped in `(…)`. Used for `{% set %}`.
+   */
+  raw?: boolean
 }
+
+/**
+ * The names in scope while transcribing, and how each resolves:
+ *  - `bound`  — `{% for %}` variables. Not `data` properties and not yet
+ *    typed (loop-variable typing is deferred), so a chain rooted at one is
+ *    skipped rather than mistranscribed as `data.item`.
+ *  - `locals` — `{% set %}` variables. These *are* typed: each becomes a
+ *    generated `const`, so a reference resolves to that local, not `data`.
+ *    Shared by reference across the whole walk so a `set` is visible to
+ *    everything after it.
+ */
+interface Scope {
+  bound: ReadonlySet<string>
+  locals: Set<string>
+}
+
+/** Prefix for generated `{% set %}` locals, to avoid colliding with TS keywords. */
+const LOCAL_PREFIX = "__njk_"
 
 export interface Insertion {
   /** offset in the ORIGINAL text where synthetic text was inserted */
@@ -163,46 +185,84 @@ function tokenize(src: string, opts?: object): Lexed {
  * variable typing is deferred); returning `null` for it lets the caller skip
  * it rather than emit a bogus `data.item`.
  */
-function transcribeExpr(node: nodes.AnyNode, document: TextDocument, patched: PatchedText, bound: ReadonlySet<string>): Transcribed | null {
-  switch (node.typename) {
-    case "Symbol": return transcribeSymbol(node, document, patched, bound)
-    case "LookupVal": return transcribeLookup(node, document, patched, bound)
+function transcribeExpr(node: nodes.AnyNode, document: TextDocument, patched: PatchedText, scope: Scope): Transcribed | null {
+  // Cast: the runtime `typename` for an array literal is "Array", but the
+  // local nunjucks type override renames it "ArrayNode" to avoid clashing
+  // with the global `Array`.
+  switch (node.typename as string) {
+    case "Symbol": return transcribeSymbol(node, document, patched, scope)
+    case "LookupVal": return transcribeLookup(node, document, patched, scope)
     case "Literal": return transcribeLiteral(node)
+    case "Array": return transcribeArray(node, document, patched, scope)
     case "Filter":
-    case "FilterAsync": return transcribeFilter(node, document, patched, bound)
+    case "FilterAsync": return transcribeFilter(node, document, patched, scope)
     case "Group": {
       // A parenthesized single expression, e.g. `(items | first)` in
       // `(items | first).name`.
       const children = (node as unknown as { children?: nodes.AnyNode[] }).children
-      return children?.length === 1 ? transcribeExpr(children[0], document, patched, bound) : null
+      return children?.length === 1 ? transcribeExpr(children[0], document, patched, scope) : null
     }
     default: return null
   }
 }
 
-function transcribeSymbol(node: nodes.AnyNode, document: TextDocument, patched: PatchedText, bound: ReadonlySet<string>): Transcribed | null {
+/** A concatenation of sub-parts into `text`, keeping each part's segments aligned. */
+function joinParts(open: string, parts: Transcribed[], separator: string, close: string): Transcribed {
+  let text = open
+  const segments: Segment[] = []
+  parts.forEach((part, index) => {
+    if (index > 0) text += separator
+    const shift = text.length
+    text += part.text
+    for (const seg of part.segments) segments.push({ ...seg, generatedOffset: seg.generatedOffset + shift })
+  })
+  return { text: text + close, segments }
+}
+
+/** `["a", data.foo]` — an array literal, so `first`/`sort`/etc. get an element type. */
+function transcribeArray(node: nodes.AnyNode, document: TextDocument, patched: PatchedText, scope: Scope): Transcribed {
+  const children = (node as unknown as { children?: nodes.AnyNode[] }).children ?? []
+  const parts = children.map(
+    (child) => transcribeExpr(child, document, patched, scope) ?? { text: "(undefined as any)", segments: [] as Segment[] }
+  )
+  return joinParts("[", parts, ", ", "]")
+}
+
+function transcribeSymbol(node: nodes.AnyNode, document: TextDocument, patched: PatchedText, scope: Scope): Transcribed | null {
   const name = (node as nodes.Symbol).value
-  if (bound.has(name)) return null
+  if (scope.bound.has(name)) return null
   const start = document.offsetAt({ line: node.lineno, character: node.colno })
   const sourceOffset = toSourceOffsetClamped(patched, start)
+  // A wholly synthetic symbol (the sentinel in `{{ }}`) collapses to a
+  // zero-length source range at the point we inserted it, which is
+  // exactly where the caret sits.
+  const sourceLength = toSourceOffsetClamped(patched, start + name.length) - sourceOffset
+
+  // A `{% set %}` local resolves to its generated `const`, not a `data`
+  // property — that's what carries the inferred type back to a reference.
+  if (scope.locals.has(name)) {
+    const local = LOCAL_PREFIX + name
+    return {
+      text: local,
+      segments: [{ sourceOffset, sourceLength, generatedOffset: 0, generatedLength: local.length }],
+    }
+  }
+
   const prefix = `${DATA_VAR}.`
   return {
     text: prefix + name,
     segments: [{
       sourceOffset,
-      // A wholly synthetic symbol (the sentinel in `{{ }}`) collapses to a
-      // zero-length source range at the point we inserted it, which is
-      // exactly where the caret sits.
-      sourceLength: toSourceOffsetClamped(patched, start + name.length) - sourceOffset,
+      sourceLength,
       generatedOffset: prefix.length,
       generatedLength: name.length,
     }],
   }
 }
 
-function transcribeLookup(node: nodes.AnyNode, document: TextDocument, patched: PatchedText, bound: ReadonlySet<string>): Transcribed | null {
+function transcribeLookup(node: nodes.AnyNode, document: TextDocument, patched: PatchedText, scope: Scope): Transcribed | null {
   const lookup = node as unknown as { target: nodes.AnyNode; val: nodes.AnyNode }
-  const target = transcribeExpr(lookup.target, document, patched, bound)
+  const target = transcribeExpr(lookup.target, document, patched, scope)
   if (!target) {
     return null
   }
@@ -264,7 +324,7 @@ function transcribeLiteral(node: nodes.AnyNode): Transcribed {
  * `builtinFilters.ts`) give the call — and everything downstream of it — a
  * real return type.
  */
-function transcribeFilter(node: nodes.AnyNode, document: TextDocument, patched: PatchedText, bound: ReadonlySet<string>): Transcribed | null {
+function transcribeFilter(node: nodes.AnyNode, document: TextDocument, patched: PatchedText, scope: Scope): Transcribed | null {
   const filter = node as unknown as { name?: nodes.AnyNode; args?: { children?: nodes.AnyNode[] } }
   const nameNode = filter.name
   const name = nameNode?.typename === "Symbol" ? (nameNode as nodes.Symbol).value : undefined
@@ -276,12 +336,12 @@ function transcribeFilter(node: nodes.AnyNode, document: TextDocument, patched: 
   // The piped value is the first argument; if it can't be transcribed (e.g. a
   // loop-bound root) we can't type the call meaningfully, so bail and let the
   // caller pull data chains out of the args instead.
-  const input = transcribeExpr(children[0], document, patched, bound)
+  const input = transcribeExpr(children[0], document, patched, scope)
   if (!input) {
     return null
   }
   const rest = children.slice(1).map(
-    (arg) => transcribeExpr(arg, document, patched, bound) ?? { text: "(undefined as any)", segments: [] as Segment[] }
+    (arg) => transcribeExpr(arg, document, patched, scope) ?? { text: "(undefined as any)", segments: [] as Segment[] }
   )
 
   const usesDot = JS_IDENTIFIER_RE.test(name)
@@ -342,20 +402,25 @@ function forLoopBoundNames(nameNode: nodes.AnyNode): string[] {
  * Symbols bound by an enclosing `{% for %}` are skipped rather than
  * mistyped: loop-variable typing is deferred (see plan).
  */
-function collectExpressions(node: unknown, document: TextDocument, patched: PatchedText, bound: ReadonlySet<string>, out: Transcribed[]): void {
+function collectExpressions(node: unknown, document: TextDocument, patched: PatchedText, scope: Scope, out: Transcribed[]): void {
   if (node == null || typeof node !== "object") return
 
   if (Array.isArray(node)) {
     for (const item of node) {
-      collectExpressions(item, document, patched, bound, out)
+      collectExpressions(item, document, patched, scope, out)
     }
     return
   }
 
   const n = node as nodes.AnyNode
 
+  if (n.typename === "Set") {
+    collectSet(n, document, patched, scope, out)
+    return
+  }
+
   if (n.typename === "Symbol" || n.typename === "LookupVal") {
-    const transcribed = transcribeExpr(n, document, patched, bound)
+    const transcribed = transcribeExpr(n, document, patched, scope)
     if (transcribed) {
       out.push(transcribed)
       // Fully consumed as one chain — don't also descend into
@@ -373,7 +438,7 @@ function collectExpressions(node: unknown, document: TextDocument, patched: Patc
   // it. The filter name itself maps for hover only — completion of filter
   // names is the service plugin's job (it knows the project's own filters).
   if (n.typename === "Filter" || n.typename === "FilterAsync") {
-    const transcribed = transcribeExpr(n, document, patched, bound)
+    const transcribed = transcribeExpr(n, document, patched, scope)
     if (transcribed) {
       out.push(transcribed)
       return
@@ -381,7 +446,7 @@ function collectExpressions(node: unknown, document: TextDocument, patched: Patc
     // Couldn't type the whole filter (e.g. a loop-bound input) — pull any
     // typeable data chains out of its arguments instead.
     const filterNode = n as unknown as Record<"args", nodes.AnyNode | null>
-    collectExpressions(filterNode.args, document, patched, bound, out)
+    collectExpressions(filterNode.args, document, patched, scope, out)
     return
   }
 
@@ -389,18 +454,69 @@ function collectExpressions(node: unknown, document: TextDocument, patched: Patc
     // `For`'s fields aren't declared as real properties in the local
     // nunjucks type overrides (only `.fields` is), so read dynamically.
     const forNode = n as unknown as Record<"arr" | "name" | "body" | "else_", nodes.AnyNode | null>
-    collectExpressions(forNode.arr, document, patched, bound, out)
-    const nested = new Set(bound)
-    for (const name of forLoopBoundNames(forNode.name as nodes.AnyNode)) nested.add(name)
-    collectExpressions(forNode.body, document, patched, nested, out)
+    collectExpressions(forNode.arr, document, patched, scope, out)
+    const nestedBound = new Set(scope.bound)
+    for (const name of forLoopBoundNames(forNode.name as nodes.AnyNode)) nestedBound.add(name)
+    // `locals` is shared by reference — a `{% set %}` inside the loop stays
+    // visible after it, matching nunjucks' template-wide `set` scoping.
+    collectExpressions(forNode.body, document, patched, { bound: nestedBound, locals: scope.locals }, out)
     if (forNode.else_) {
-      collectExpressions(forNode.else_, document, patched, bound, out)
+      collectExpressions(forNode.else_, document, patched, scope, out)
     }
     return
   }
 
   for (const field of (n as unknown as { fields?: string[] }).fields ?? []) {
-    collectExpressions((n as any)[field], document, patched, bound, out)
+    collectExpressions((n as any)[field], document, patched, scope, out)
+  }
+}
+
+/**
+ * `{% set l = <expr> %}` becomes `const __njk_l = <expr>;`, so `l` carries the
+ * inferred type of the assigned expression. The target name is registered as a
+ * local (see `Scope.locals`) so every later reference to `l` resolves to this
+ * generated const instead of a `data` property.
+ *
+ * The value is transcribed *before* the target is registered, so a
+ * self-referential `{% set x = x + 1 %}` reads the previous `x`. Re-setting an
+ * existing local doesn't redeclare (that would be a TS error); the value is
+ * still walked so any data references inside it keep working, but the
+ * variable's type stays that of its first assignment — a known limitation of
+ * this spike.
+ */
+function collectSet(node: nodes.AnyNode, document: TextDocument, patched: PatchedText, scope: Scope, out: Transcribed[]): void {
+  const setNode = node as unknown as { targets?: nodes.AnyNode[]; value?: nodes.AnyNode }
+  const value = setNode.value ? transcribeExpr(setNode.value, document, patched, scope) : null
+  const targets = (setNode.targets ?? []).filter((t) => t.typename === "Symbol")
+
+  for (const target of targets) {
+    const name = (target as nodes.Symbol).value
+
+    if (scope.locals.has(name)) {
+      // Already declared — don't redeclare, but keep the value's data
+      // references alive by emitting it as a throwaway expression.
+      if (value) out.push({ text: value.text, segments: value.segments })
+      continue
+    }
+    scope.locals.add(name)
+
+    const local = LOCAL_PREFIX + name
+    const declPrefix = `const ${local} = `
+    const start = document.offsetAt({ line: target.lineno, character: target.colno })
+    const sourceOffset = toSourceOffsetClamped(patched, start)
+    const nameSegment: Segment = {
+      sourceOffset,
+      sourceLength: toSourceOffsetClamped(patched, start + name.length) - sourceOffset,
+      generatedOffset: "const ".length,
+      generatedLength: local.length,
+    }
+
+    const valueText = value?.text ?? "(undefined as any)"
+    const valueSegments = (value?.segments ?? []).map(
+      (seg) => ({ ...seg, generatedOffset: seg.generatedOffset + declPrefix.length })
+    )
+
+    out.push({ raw: true, text: declPrefix + valueText, segments: [nameSegment, ...valueSegments] })
   }
 }
 
@@ -441,12 +557,14 @@ export function buildNunjucksTypeScriptSource(
   const mappings: CodeMapping[] = []
 
   const expressions: Transcribed[] = []
-  collectExpressions(ast, document, patched, new Set(), expressions)
+  collectExpressions(ast, document, patched, { bound: new Set(), locals: new Set() }, expressions)
 
   for (const expr of expressions) {
     const statementStart = generated.length
-    generated += `(${expr.text});\n`
-    const exprOffsetInStatement = 1 // leading "("
+    // `{% set %}` produces a whole statement (`const x = …`); everything else
+    // is an expression that needs wrapping so it stands alone.
+    generated += expr.raw ? `${expr.text};\n` : `(${expr.text});\n`
+    const exprOffsetInStatement = expr.raw ? 0 : 1 // leading "("
 
     for (const seg of expr.segments) {
       const generatedOffset = statementStart + exprOffsetInStatement + seg.generatedOffset

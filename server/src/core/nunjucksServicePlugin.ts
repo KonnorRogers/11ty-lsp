@@ -53,7 +53,12 @@ export function createNunjucksServicePlugin(host: NunjucksServicePluginHost): La
       completionProvider: {
         // `%` fires on `{%`, `|` on a filter pipe, and space covers
         // `{% ` / `| ` where the name slot opens up.
-        triggerCharacters: ["%", "|", " "],
+        triggerCharacters: [
+          "{",
+          "%",
+          "|",
+          " ",
+        ],
       },
       diagnosticProvider: {
         interFileDependencies: true,

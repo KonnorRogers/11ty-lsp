@@ -344,3 +344,37 @@ test("the filter name maps for hover but opts out of completion", () => {
   // …and it points at the __filters member, not a data property.
   assert.equal(textAt(text, nameMapping.generatedOffsets[0], nameMapping.generatedLengths![0]), "upper")
 })
+
+// —— {% set %} and array literals ——
+test("an array literal transcribes so filters get an element type", () => {
+  assert.equal(statementFor('{{ ["a", "b"] | first }}', {}), '(__filters.first(["a", "b"]));')
+})
+
+test("{% set %} declares a typed local, not a data property", () => {
+  const { text } = buildNunjucksTypeScriptSource('{% set l = ["bar", "baz"] | first %}', {})
+  assert.match(text, /const __njk_l = __filters\.first\(\["bar", "baz"\]\);/)
+  // The value flows through, so `l` is `string`, never `data.l`.
+  assert.doesNotMatch(text, /data\.l\b/)
+})
+
+test("a reference to a set variable resolves to the local", () => {
+  const { text } = buildNunjucksTypeScriptSource("{% set x = 5 %}{{ x }}", {})
+  assert.match(text, /const __njk_x = 5;/)
+  assert.match(text, /\(__njk_x\);/)
+  assert.doesNotMatch(text, /data\.x\b/)
+})
+
+test("member access on a set variable works", () => {
+  const { text } = buildNunjucksTypeScriptSource("{% set d = obj.d %}{{ d.e }}", { obj: { d: { e: 1 } } })
+  assert.match(text, /const __njk_d = data\.obj\.d;/)
+  assert.match(text, /\(__njk_d\.e\);/)
+})
+
+test("the set target maps back to the source variable name", () => {
+  const source = '{% set l = ["bar"] | first %}'
+  const { text, mappings } = buildNunjucksTypeScriptSource(source, {})
+  const varOffset = source.indexOf("set ") + 4
+  const mapping = mappings.find((m) => m.sourceOffsets[0] === varOffset)
+  assert.ok(mapping, "expected a mapping over the set variable name")
+  assert.equal(textAt(text, mapping.generatedOffsets[0], mapping.generatedLengths![0]), "__njk_l")
+})
