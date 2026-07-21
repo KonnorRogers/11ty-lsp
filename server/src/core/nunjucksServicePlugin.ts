@@ -164,7 +164,8 @@ export function createNunjucksServicePlugin(host: NunjucksServicePluginHost): La
 
             let range = {
               start: { line: 0, character: 0 },
-              end: document.positionAt(document.getText().length),
+              end: { line: 0, character: 1 }
+              // end: document.positionAt(document.getText().length),
             }
 
             if (hasPos) {
